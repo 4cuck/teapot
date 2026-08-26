@@ -11,6 +11,10 @@ use super::{
    SessionLease,
    SessionPool,
    TidClient,
+   budget::{
+      self,
+      ClientBudget,
+   },
    endpoints,
    http::HttpClient,
    parser,
@@ -57,6 +61,9 @@ use crate::{
    },
    utils::formatters,
 };
+
+/// A search spends a `SearchTimeline` call and is never served from cache.
+const SEARCH_COST: f64 = 2.0;
 
 fn space_id_from_url(url: &str) -> Option<&str> {
    url.split("/spaces/")
@@ -239,6 +246,7 @@ pub struct ApiClient {
    client:      HttpClient,
    sessions:    SessionPool,
    tid:         TidClient,
+   budget:      ClientBudget,
    tid_enabled: bool,
 }
 
@@ -276,6 +284,7 @@ impl ApiClient {
          client,
          sessions,
          tid,
+         budget: ClientBudget::new(config.config.client_budget),
          tid_enabled: !config.config.disable_tid,
       }
    }
@@ -358,12 +367,15 @@ impl ApiClient {
    where
       T: DeserializeOwned,
    {
-      let session = self.sessions.acquire(endpoint, None).await?;
+      let session = self.charged_session(endpoint, None).await?;
       self
-         .graphql_request_with_session(session, endpoint, variables, features, field_toggles)
+         .graphql_request_with_session(session, endpoint, variables, features, field_toggles, None)
          .await
    }
 
+   /// `retry_kind` pins the replacement when the caller picked the endpoint and
+   /// variables from the first session's kind, since an OAuth request retried
+   /// through a cookie session would still send the OAuth endpoint.
    async fn graphql_request_with_session<T>(
       &self,
       session: SessionLease,
@@ -371,29 +383,113 @@ impl ApiClient {
       variables: &str,
       features: &str,
       field_toggles: Option<&str>,
+      retry_kind: Option<SessionKind>,
    ) -> Result<T>
    where
       T: DeserializeOwned,
    {
       let session_id = session.id;
-      let session_kind = session.kind;
-      match self
+      let first = self
          .graphql_request_inner(&session, endpoint, variables, features, field_toggles)
+         .await;
+
+      match first {
+         Err(Error::SessionRejected(_) | Error::RateLimited) => {},
+         other => return other,
+      }
+
+      tracing::warn!(
+         session_id,
+         endpoint,
+         "session unusable, retrying on another"
+      );
+      drop(session);
+      self.charge(endpoint).await?;
+      let retry = match self
+         .sessions
+         .acquire_excluding(endpoint, retry_kind, Some(session_id))
          .await
       {
-         Err(Error::SessionRejected(ref msg)) => {
-            tracing::warn!("Session rejected, retrying with another: {msg}");
-            drop(session);
-            let retry = self
-               .sessions
-               .acquire_excluding(endpoint, Some(session_kind), Some(session_id))
-               .await?;
-            self
-               .graphql_request_inner(&retry, endpoint, variables, features, field_toggles)
-               .await
+         Ok(retry) => retry,
+         Err(err) => {
+            self.refund(endpoint).await;
+            return first.and(Err(err));
          },
-         other => other,
+      };
+      self
+         .graphql_request_inner(&retry, endpoint, variables, features, field_toggles)
+         .await
+   }
+
+   /// Take a session for one upstream call, billing the caller first.
+   ///
+   /// The only way to reach X, so a caller cannot spend quota by taking a
+   /// route that forgot to charge. Billing precedes acquisition so a spent
+   /// caller neither holds a lease nor waits on a permit, and a lease that
+   /// never materialises is refunded rather than charged for nothing.
+   pub(crate) async fn charged_session(
+      &self,
+      endpoint: &str,
+      kind: Option<SessionKind>,
+   ) -> Result<SessionLease> {
+      self.charge(endpoint).await?;
+      match self.sessions.acquire(endpoint, kind).await {
+         Ok(session) => Ok(session),
+         Err(err) => {
+            self.refund(endpoint).await;
+            Err(err)
+         },
       }
+   }
+
+   /// [`charged_session`](Self::charged_session) where the endpoint depends on
+   /// which kind of session is chosen.
+   pub(crate) async fn charged_session_by_kind(
+      &self,
+      cookie_api: &str,
+      oauth_api: &str,
+   ) -> Result<SessionLease> {
+      self.charge(cookie_api).await?;
+      match self.sessions.acquire_by_kind(cookie_api, oauth_api).await {
+         Ok(session) => Ok(session),
+         Err(err) => {
+            self.refund(cookie_api).await;
+            Err(err)
+         },
+      }
+   }
+
+   /// Give back what [`charge`](Self::charge) took for a call that never ran.
+   async fn refund(&self, endpoint: &str) {
+      if let Some(client) = budget::current_client() {
+         self.budget.refund(&client, Self::cost_of(endpoint)).await;
+      }
+   }
+
+   /// A search spends a `SearchTimeline` call and is never served from cache.
+   fn cost_of(endpoint: &str) -> f64 {
+      if endpoint.contains("SearchTimeline") {
+         SEARCH_COST
+      } else {
+         1.0
+      }
+   }
+
+   /// Charge one upstream call to the caller of the current request.
+   ///
+   /// Called before a session is acquired, so a spent caller neither takes a
+   /// lease nor waits on a permit, and once per attempt so a retry costs what
+   /// it spends.
+   async fn charge(&self, endpoint: &str) -> Result<()> {
+      let cost = Self::cost_of(endpoint);
+      if let Some(client) = budget::current_client()
+         && !self.budget.try_spend(&client, cost).await
+      {
+         tracing::debug!(?client, endpoint, "client budget exhausted");
+         return Err(Error::ClientBudgetExhausted);
+      }
+
+      Ok(())
    }
 
    /// Inner implementation of [`graphql_request`].
@@ -586,7 +682,7 @@ impl ApiClient {
       if let Err(Error::TwitterApi(ref msg)) = api_check
          && msg.starts_with("Invalid token")
       {
-         self.sessions.mark_limited(session.id).await;
+         self.sessions.mark_rejected(session.id).await;
          return Err(Error::SessionRejected(msg.clone()));
       }
       if matches!(api_check, Err(Error::RateLimited)) {
@@ -607,8 +703,7 @@ impl ApiClient {
       T: DeserializeOwned,
    {
       let session = self
-         .sessions
-         .acquire(session_key, Some(SessionKind::Cookie))
+         .charged_session(session_key, Some(SessionKind::Cookie))
          .await?;
 
       let (bearer, tid) = self.bearer_and_tid(api_path).await;

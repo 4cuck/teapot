@@ -262,8 +262,7 @@ impl ApiClient {
    pub async fn get_user_media(&self, user_id: &str, cursor: Option<&str>) -> Result<Timeline> {
       // Select the endpoint from the same leased session used for the request.
       let session = self
-         .sessions
-         .acquire(endpoints::GRAPH_USER_MEDIA, None)
+         .charged_session_by_kind(endpoints::GRAPH_USER_MEDIA, endpoints::GRAPH_USER_MEDIA_V2)
          .await?;
       let (endpoint, variables) = match session.kind {
          SessionKind::OAuth => {
@@ -280,6 +279,7 @@ impl ApiClient {
          },
       };
 
+      let retry_kind = session.kind;
       let data = self
          .graphql_request_with_session::<UserTimelineData>(
             session,
@@ -287,6 +287,7 @@ impl ApiClient {
             &variables,
             endpoints::GQL_FEATURES,
             None,
+            Some(retry_kind),
          )
          .await?;
 
@@ -478,8 +479,10 @@ impl ApiClient {
       cursor: Option<&str>,
    ) -> Result<Timeline> {
       let session = self
-         .sessions
-         .acquire(endpoints::GRAPH_USER_TWEETS_AND_REPLIES, None)
+         .charged_session_by_kind(
+            endpoints::GRAPH_USER_TWEETS_AND_REPLIES,
+            endpoints::GRAPH_USER_TWEETS_AND_REPLIES_V2,
+         )
          .await?;
       let (endpoint, variables, field_toggles) = match session.kind {
          SessionKind::OAuth => {
@@ -497,6 +500,7 @@ impl ApiClient {
             )
          },
       };
+      let retry_kind = session.kind;
       let data = self
          .graphql_request_with_session::<UserTimelineData>(
             session,
@@ -504,6 +508,7 @@ impl ApiClient {
             &variables,
             endpoints::GQL_FEATURES,
             field_toggles,
+            Some(retry_kind),
          )
          .await?;
       parser::parse_timeline(&data)
@@ -539,8 +544,7 @@ impl ApiClient {
    pub async fn translate_tweet(&self, tweet_id: &str) -> Result<Translation> {
       let url = endpoints::translate_url(tweet_id);
       let session = self
-         .sessions
-         .acquire(endpoints::GRAPH_TWEET_DETAIL, Some(SessionKind::Cookie))
+         .charged_session(endpoints::GRAPH_TWEET_DETAIL, Some(SessionKind::Cookie))
          .await?;
 
       let api_path = format!(

@@ -22,6 +22,7 @@ use tokio::task::JoinSet;
 
 use crate::{
    AppState,
+   api::budget,
    error::Result,
    types::{
       ArticleBlockType,
@@ -82,7 +83,9 @@ async fn show_note_inner(state: AppState, jar: CookieJar, id: String) -> Result<
          break;
       };
       let api = state.api.clone();
-      tasks.spawn(async move { api.get_tweet(&tweet_id).await });
+      tasks.spawn(budget::scoped(
+         async move { api.get_tweet(&tweet_id).await },
+      ));
    }
    while let Some(joined) = tasks.join_next().await {
       if let Ok(Ok(tweet)) = joined {
@@ -90,7 +93,9 @@ async fn show_note_inner(state: AppState, jar: CookieJar, id: String) -> Result<
       }
       if let Some(tweet_id) = tweet_ids.pop_front() {
          let api = state.api.clone();
-         tasks.spawn(async move { api.get_tweet(&tweet_id).await });
+         tasks.spawn(budget::scoped(
+            async move { api.get_tweet(&tweet_id).await },
+         ));
       }
    }
 

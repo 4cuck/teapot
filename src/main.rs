@@ -11,7 +11,10 @@ mod views;
 
 use std::{
    env,
-   net::SocketAddr,
+   net::{
+      IpAddr,
+      SocketAddr,
+   },
    sync::Arc,
    time::Duration,
 };
@@ -64,6 +67,8 @@ pub struct AppState {
    pub http_client:         HttpClient,
    pub gif_transcoder:      Option<Arc<GifTranscoder>>,
    pub translation_limiter: Arc<translation::TranslationLimiter>,
+   /// Peers permitted to name a different caller through forwarding headers.
+   pub trusted_proxies:     Arc<[IpAddr]>,
 }
 
 #[tokio::main]
@@ -124,6 +129,17 @@ async fn main() -> eyre::Result<()> {
       None
    };
 
+   // Validated at load, so anything here parses.
+   let trusted_proxies = config
+      .config
+      .trusted_proxies
+      .iter()
+      .filter_map(|proxy| proxy.parse::<IpAddr>().ok())
+      .collect::<Vec<_>>();
+   if trusted_proxies.is_empty() {
+      tracing::info!("No trustedProxies configured, billing clients by socket address");
+   }
+
    // Create application state
    let state = AppState {
       config: Arc::clone(&config),
@@ -132,6 +148,7 @@ async fn main() -> eyre::Result<()> {
       http_client,
       gif_transcoder,
       translation_limiter: Arc::new(translation::TranslationLimiter::new()),
+      trusted_proxies: trusted_proxies.into(),
    };
 
    // Build the router with specific routes before static files
@@ -155,6 +172,10 @@ async fn main() -> eyre::Result<()> {
         .route_service("/robots.txt", ServeFile::new(format!("{static_dir}/robots.txt")))
         .route_service("/opensearch.xml", ServeFile::new(format!("{static_dir}/opensearch.xml")))
         .layer(middleware::from_fn(routes::prefs_middleware))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            routes::client_middleware,
+        ))
         .layer(SetResponseHeaderLayer::overriding(
             header::REFERRER_POLICY,
             HeaderValue::from_static("no-referrer"),
@@ -196,7 +217,11 @@ async fn main() -> eyre::Result<()> {
    let listener = TcpListener::bind(addr).await?;
 
    tracing::info!("Listening on {addr}");
-   axum::serve(listener, app).await?;
+   axum::serve(
+      listener,
+      app.into_make_service_with_connect_info::<SocketAddr>(),
+   )
+   .await?;
 
    Ok(())
 }

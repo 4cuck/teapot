@@ -1,5 +1,6 @@
 use std::{
    fs,
+   net::IpAddr,
    path::Path,
    process::Command,
 };
@@ -41,6 +42,10 @@ impl Default for GifTranscodingConfig {
          external_domain: String::new(),
       }
    }
+}
+
+const fn default_client_budget() -> bool {
+   true
 }
 
 fn default_gif_cache_dir() -> String {
@@ -113,6 +118,10 @@ pub struct AppConfig {
    pub base64_media:        bool,
    #[serde(default = "default_true", rename = "enableRSS")]
    pub enable_rss:          bool,
+   #[serde(default = "default_client_budget", rename = "clientBudget")]
+   pub client_budget:       bool,
+   #[serde(default, rename = "trustedProxies")]
+   pub trusted_proxies:     Vec<String>,
    #[serde(default, rename = "enableDebug")]
    pub enable_debug:        bool,
    #[serde(default, rename = "debugToken")]
@@ -216,6 +225,15 @@ impl Config {
             "config.debugToken must be set to at least 32 characters when enableDebug is true"
                .into(),
          ));
+      }
+      // A typo here is invisible at runtime and silently collapses every
+      // visitor behind the proxy into one shared budget, so refuse to start.
+      for proxy in &config.config.trusted_proxies {
+         if proxy.parse::<IpAddr>().is_err() {
+            return Err(Error::InvalidConfig(format!(
+               "config.trustedProxies entry {proxy:?} is not an IP address"
+            )));
+         }
       }
       if config.server.http_max_connections == 0 {
          return Err(Error::InvalidConfig(

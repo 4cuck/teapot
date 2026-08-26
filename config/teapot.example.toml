@@ -27,6 +27,10 @@ base64Media = false
 # Enable RSS feeds
 enableRSS = true
 
+# Cap how fast one client can spend X API quota. Cache hits, media proxying and
+# static assets are never charged, since they cost no upstream call.
+clientBudget = true
+
 # Enable debug endpoints (/.health, /.sessions)
 enableDebug = false
 

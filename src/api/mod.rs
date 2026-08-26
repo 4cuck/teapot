@@ -1,4 +1,5 @@
 mod auth;
+pub mod budget;
 mod client;
 mod endpoints;
 pub mod http;

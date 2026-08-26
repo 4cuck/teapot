@@ -14,9 +14,12 @@ mod timeline;
 
 mod unsupported;
 
+use std::net::SocketAddr;
+
 use axum::{
    Router,
    extract::{
+      ConnectInfo,
       Request,
       State,
    },
@@ -45,6 +48,7 @@ use time::Duration;
 
 use crate::{
    AppState,
+   api::budget,
    types::Prefs,
    views::{
       layout::PageLayout,
@@ -100,6 +104,18 @@ pub fn router() -> Router<AppState> {
         .merge(notes::router())                    // /{username}/article/{id}, before timeline catch-all
         .merge(unsupported::i_catchall_router())   // Rule 3: after specific /i/* routes
         .merge(timeline::router()) // Rule 4: MUST BE LAST
+}
+
+/// Bind the caller to the request so the API client can bill upstream calls to
+/// it without every route having to thread it through.
+pub async fn client_middleware(
+   State(state): State<AppState>,
+   ConnectInfo(peer): ConnectInfo<SocketAddr>,
+   request: Request,
+   next: Next,
+) -> Response {
+   let client = budget::client_from(peer.ip(), request.headers(), &state.trusted_proxies);
+   budget::CLIENT.scope(client, next.run(request)).await
 }
 
 /// Middleware that applies `?prefs=` URL parameter overrides.

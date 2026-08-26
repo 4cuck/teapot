@@ -50,6 +50,9 @@ pub enum Error {
    #[error("Session rejected: {0}")]
    SessionRejected(String),
 
+   #[error("Client budget exhausted")]
+   ClientBudgetExhausted,
+
    #[error("Not found: {0}")]
    NotFound(String),
 
@@ -84,7 +87,7 @@ impl IntoResponse for Error {
          &Self::NotFound(_) | &Self::UserNotFound(_) | &Self::TweetNotFound(_) => {
             StatusCode::NOT_FOUND
          },
-         &Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+         &Self::RateLimited | &Self::ClientBudgetExhausted => StatusCode::TOO_MANY_REQUESTS,
          &Self::InvalidUrl(_) => StatusCode::BAD_REQUEST,
          &Self::NoSessions | &Self::SessionRejected(_) => StatusCode::SERVICE_UNAVAILABLE,
          &Self::UserSuspended(_) | &Self::ProtectedUser(_) | &Self::HmacVerification => {
@@ -106,6 +109,10 @@ impl IntoResponse for Error {
          | &Self::ProtectedUser(ref message)
          | &Self::InvalidUrl(ref message) => message.as_str(),
          &Self::RateLimited => "Upstream rate limit reached; please try again later.",
+         &Self::ClientBudgetExhausted => {
+            "You are requesting uncached pages faster than this instance can fetch them. Cached \
+             pages still work; please slow down."
+         },
          &Self::HmacVerification => "The media URL signature is invalid.",
          &Self::NoSessions | &Self::SessionRejected(_) => {
             "The service has no available upstream sessions."

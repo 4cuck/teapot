@@ -39,6 +39,8 @@ fn test_config() -> Config {
          hmac_key:            "0123456789abcdef0123456789abcdef".to_owned(),
          base64_media:        true,
          enable_rss:          true,
+         client_budget:       false,
+         trusted_proxies:     Vec::new(),
          enable_debug:        false,
          debug_token:         String::new(),
          proxy:               String::new(),
