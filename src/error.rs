@@ -47,6 +47,9 @@ pub enum Error {
    #[error("Rate limited")]
    RateLimited,
 
+   #[error("Session rejected: {0}")]
+   SessionRejected(String),
+
    #[error("Not found: {0}")]
    NotFound(String),
 
@@ -83,7 +86,7 @@ impl IntoResponse for Error {
          },
          &Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
          &Self::InvalidUrl(_) => StatusCode::BAD_REQUEST,
-         &Self::NoSessions => StatusCode::SERVICE_UNAVAILABLE,
+         &Self::NoSessions | &Self::SessionRejected(_) => StatusCode::SERVICE_UNAVAILABLE,
          &Self::UserSuspended(_) | &Self::ProtectedUser(_) | &Self::HmacVerification => {
             StatusCode::FORBIDDEN
          },
@@ -104,7 +107,9 @@ impl IntoResponse for Error {
          | &Self::InvalidUrl(ref message) => message.as_str(),
          &Self::RateLimited => "Upstream rate limit reached; please try again later.",
          &Self::HmacVerification => "The media URL signature is invalid.",
-         &Self::NoSessions => "The service has no available upstream sessions.",
+         &Self::NoSessions | &Self::SessionRejected(_) => {
+            "The service has no available upstream sessions."
+         },
          _ => "An internal service error occurred.",
       };
       let html = format!(

@@ -38,6 +38,10 @@ pub struct SessionCredentials {
 pub struct SessionLimits {
    pub limited:    bool,
    pub limited_at: i64,
+   /// The credentials themselves were refused, which no amount of waiting
+   /// fixes, so this is kept apart from the rate-limit state that expires.
+   #[serde(skip)]
+   pub rejected:   bool,
    pub apis:       HashMap<String, RateLimit>,
 }
 
@@ -48,12 +52,8 @@ const GLOBAL_LIMIT_DURATION_SECS: i64 = 15 * 60;
 impl SessionLimits {
    /// Check if rate limited for a specific API.
    pub fn is_limited(&self, api: &str) -> bool {
-      if self.limited {
-         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-         if now - self.limited_at < GLOBAL_LIMIT_DURATION_SECS {
-            return true;
-         }
-         // Clear expired limits on the next mutable access
+      if self.is_globally_limited() {
+         return true;
       }
       if let Some(limit) = self.apis.get(api) {
          let now = time::OffsetDateTime::now_utc().unix_timestamp();
@@ -62,6 +62,15 @@ impl SessionLimits {
          }
       }
       false
+   }
+
+   /// Whether the session-wide limit is set and has not yet expired.
+   #[must_use]
+   pub fn is_globally_limited(&self) -> bool {
+      // Cleared on the next mutable access rather than here.
+      self.limited
+         && time::OffsetDateTime::now_utc().unix_timestamp() - self.limited_at
+            < GLOBAL_LIMIT_DURATION_SECS
    }
 
    pub fn update_limit(&mut self, api: &str, limit: i32, remaining: i32, reset: i64) {
@@ -120,6 +129,7 @@ impl Session {
          SessionLimits {
             limited:    self.limited,
             limited_at: self.limited_at,
+            rejected:   false,
             apis:       self.apis,
          },
       )

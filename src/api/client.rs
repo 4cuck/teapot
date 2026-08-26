@@ -381,8 +381,8 @@ impl ApiClient {
          .graphql_request_inner(&session, endpoint, variables, features, field_toggles)
          .await
       {
-         Err(Error::TwitterApi(ref msg)) if msg.starts_with("Invalid token") => {
-            tracing::warn!("Token rejected, retrying with another session: {msg}");
+         Err(Error::SessionRejected(ref msg)) => {
+            tracing::warn!("Session rejected, retrying with another: {msg}");
             drop(session);
             let retry = self
                .sessions
@@ -567,6 +567,13 @@ impl ApiClient {
             return Err(Error::RateLimited);
          }
 
+         // Only 401 means the credentials themselves were refused. A 403 is an
+         // authenticated request denied a particular resource.
+         if status.as_u16() == 401 {
+            self.sessions.mark_rejected(session.id).await;
+            return Err(Error::SessionRejected(format!("Status {status}: {body}")));
+         }
+
          return Err(Error::TwitterApi(format!("Status {status}: {body}")));
       }
 
@@ -580,6 +587,7 @@ impl ApiClient {
          && msg.starts_with("Invalid token")
       {
          self.sessions.mark_limited(session.id).await;
+         return Err(Error::SessionRejected(msg.clone()));
       }
       if matches!(api_check, Err(Error::RateLimited)) {
          self

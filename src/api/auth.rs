@@ -54,6 +54,7 @@ pub struct HealthResponse {
 pub struct SessionStats {
    pub total:     usize,
    pub limited:   usize,
+   pub rejected:  usize,
    pub available: usize,
 }
 
@@ -76,6 +77,7 @@ pub struct SessionDetail {
    pub username:   String,
    pub kind:       SessionKind,
    pub limited:    bool,
+   pub rejected:   bool,
    pub limited_at: i64,
    pub pending:    i32,
    pub apis:       HashMap<String, RateLimit>,
@@ -177,6 +179,39 @@ impl SessionPool {
       required_kind: Option<SessionKind>,
       excluded_id: Option<i64>,
    ) -> Result<SessionLease> {
+      self.acquire_with(|_| api, required_kind, excluded_id).await
+   }
+
+   /// Acquire when the endpoint depends on which kind of session is chosen.
+   ///
+   /// The OAuth and cookie flows call different endpoints for the same feature,
+   /// and each keeps its own budget, so picking a session against one key and
+   /// then spending the other hides an exhausted bucket from selection.
+   pub(crate) async fn acquire_by_kind(
+      &self,
+      cookie_api: &str,
+      oauth_api: &str,
+   ) -> Result<SessionLease> {
+      self
+         .acquire_with(
+            |kind| {
+               match kind {
+                  SessionKind::OAuth => oauth_api,
+                  SessionKind::Cookie => cookie_api,
+               }
+            },
+            None,
+            None,
+         )
+         .await
+   }
+
+   async fn acquire_with<'a>(
+      &self,
+      api_for: impl Fn(SessionKind) -> &'a str + Send,
+      required_kind: Option<SessionKind>,
+      excluded_id: Option<i64>,
+   ) -> Result<SessionLease> {
       if self.sessions.is_empty() {
          return Err(Error::NoSessions);
       }
@@ -188,6 +223,9 @@ impl SessionPool {
          .filter(|slot| {
             excluded_id != Some(slot.credentials.id)
                && required_kind.is_none_or(|kind| slot.credentials.kind == kind)
+               && !limits
+                  .get(&slot.credentials.id)
+                  .is_some_and(|session_limits| session_limits.rejected)
          })
          .collect::<Vec<_>>();
 
@@ -199,7 +237,9 @@ impl SessionPool {
       for slot in &eligible {
          let limited = limits
             .get(&slot.credentials.id)
-            .is_some_and(|session_limits| session_limits.is_limited(api));
+            .is_some_and(|session_limits| {
+               session_limits.is_limited(api_for(slot.credentials.kind))
+            });
          if !limited && let Ok(permit) = Arc::clone(&slot.permits).try_acquire_owned() {
             return Ok(SessionLease {
                credentials: Arc::clone(&slot.credentials),
@@ -215,14 +255,18 @@ impl SessionPool {
          .find(|slot| {
             !limits
                .get(&slot.credentials.id)
-               .is_some_and(|session_limits| session_limits.is_limited(api))
+               .is_some_and(|session_limits| {
+                  session_limits.is_limited(api_for(slot.credentials.kind))
+               })
          })
          .copied()
          .or_else(|| {
             eligible.iter().copied().min_by_key(|slot| {
                limits
                   .get(&slot.credentials.id)
-                  .and_then(|session_limits| session_limits.apis.get(api))
+                  .and_then(|session_limits| {
+                     session_limits.apis.get(api_for(slot.credentials.kind))
+                  })
                   .map_or(i64::MAX, |rate| rate.reset)
             })
          })
@@ -256,6 +300,7 @@ impl SessionPool {
       let mut limits = self.limits.write().await;
 
       if let Some(lim) = limits.get_mut(&session_id) {
+         lim.rejected = false;
          // The session responded, so clear its expired global limit
          if lim.limited && !lim.is_limited(api) {
             lim.limited = false;
@@ -272,6 +317,16 @@ impl SessionPool {
 
       if let Some(lim) = limits.get_mut(&session_id) {
          lim.limit_endpoint(api);
+      }
+   }
+
+   /// Mark a session's credentials as refused, taking it out of rotation until
+   /// the tokens are replaced.
+   pub async fn mark_rejected(&self, session_id: i64) {
+      let mut limits = self.limits.write().await;
+
+      if let Some(lim) = limits.get_mut(&session_id) {
+         lim.rejected = true;
       }
    }
 
@@ -320,11 +375,16 @@ impl SessionPool {
       let limits = self.limits.read().await;
 
       let mut limited_count = 0;
+      let mut rejected_count = 0;
       let mut total_requests = 0;
       let mut by_api = HashMap::<String, i32>::new();
 
       for lim in limits.values() {
-         if lim.limited {
+         // Counted once by effective state, since a session can carry both
+         // flags and a global limit expires on its own.
+         if lim.rejected {
+            rejected_count += 1;
+         } else if lim.is_globally_limited() {
             limited_count += 1;
          }
 
@@ -340,7 +400,13 @@ impl SessionPool {
          sessions:  SessionStats {
             total:     self.sessions.len(),
             limited:   limited_count,
-            available: self.sessions.len() - limited_count,
+            rejected:  rejected_count,
+            // Endpoint budgets are per API, so this counts only sessions that
+            // are unusable for every endpoint.
+            available: self
+               .sessions
+               .len()
+               .saturating_sub(limited_count + rejected_count),
          },
          requests:  RequestStats {
             total: total_requests,
@@ -365,6 +431,7 @@ impl SessionPool {
                username:   sess.username.clone(),
                kind:       sess.kind,
                limited:    lim.is_some_and(|sl| sl.limited),
+               rejected:   lim.is_some_and(|sl| sl.rejected),
                limited_at: lim.map_or(0, |sl| sl.limited_at),
                pending:    i32::try_from(
                   slot
