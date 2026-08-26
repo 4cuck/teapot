@@ -264,6 +264,17 @@ impl SessionPool {
       }
    }
 
+   /// Mark one API as rate limited for a session, leaving its other endpoints
+   /// usable. Each endpoint has its own budget, so a 429 on one says nothing
+   /// about the rest.
+   pub async fn mark_endpoint_limited(&self, session_id: i64, api: &str) {
+      let mut limits = self.limits.write().await;
+
+      if let Some(lim) = limits.get_mut(&session_id) {
+         lim.limit_endpoint(api);
+      }
+   }
+
    /// Mark a session as globally rate limited.
    pub async fn mark_limited(&self, session_id: i64) {
       let mut limits = self.limits.write().await;

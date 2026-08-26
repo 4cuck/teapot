@@ -71,6 +71,16 @@ impl SessionLimits {
          reset,
       });
    }
+
+   /// Record a single API as exhausted for the rest of the window.
+   ///
+   /// For a 429 that arrives without `x-rate-limit-*` headers, where nothing
+   /// would otherwise be recorded and the session would retry immediately.
+   pub fn limit_endpoint(&mut self, api: &str) {
+      let now = time::OffsetDateTime::now_utc().unix_timestamp();
+      let limit = self.apis.get(api).map_or(0, |rate| rate.limit);
+      self.update_limit(api, limit, 0, now + GLOBAL_LIMIT_DURATION_SECS);
+   }
 }
 
 /// Authentication session for Twitter API (used for JSONL deserialization).

@@ -522,7 +522,7 @@ impl ApiClient {
       let response = self.client.get_with_headers(&url, &headers).await?;
 
       // Check rate limit headers
-      if let Some(remaining) = response.headers().get("x-rate-limit-remaining")
+      let limit_recorded = if let Some(remaining) = response.headers().get("x-rate-limit-remaining")
          && let Ok(remaining_str) = remaining.to_str()
          && let Ok(remaining_val) = remaining_str.parse::<i32>()
       {
@@ -543,7 +543,10 @@ impl ApiClient {
             .sessions
             .update_session_limit(session.id, endpoint, limit, remaining_val, reset)
             .await;
-      }
+         remaining_val <= 0 && reset > time::OffsetDateTime::now_utc().unix_timestamp()
+      } else {
+         false
+      };
 
       if !response.status().is_success() {
          let status = response.status();
@@ -555,7 +558,12 @@ impl ApiClient {
          );
 
          if status.as_u16() == 429 {
-            self.sessions.mark_limited(session.id).await;
+            if !limit_recorded {
+               self
+                  .sessions
+                  .mark_endpoint_limited(session.id, endpoint)
+                  .await;
+            }
             return Err(Error::RateLimited);
          }
 
@@ -572,6 +580,12 @@ impl ApiClient {
          && msg.starts_with("Invalid token")
       {
          self.sessions.mark_limited(session.id).await;
+      }
+      if matches!(api_check, Err(Error::RateLimited)) {
+         self
+            .sessions
+            .mark_endpoint_limited(session.id, endpoint)
+            .await;
       }
       api_check?;
 
