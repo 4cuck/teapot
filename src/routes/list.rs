@@ -5,7 +5,6 @@ use axum::{
       Query,
       State,
    },
-   http::StatusCode,
    response::{
       Html,
       IntoResponse as _,
@@ -17,6 +16,7 @@ use axum_extra::extract::CookieJar;
 use maud::html;
 use serde::Deserialize;
 
+use super::helpers;
 use crate::{
    AppState,
    cache::keys as cache_keys,
@@ -239,17 +239,11 @@ async fn list_members(
          Ok(Html(markup.into_string()).into_response())
       },
       Err(err) => {
-         tracing::error!(error = ?err, "failed to load list members");
-         let markup = layout::render_error(
+         Ok(helpers::api_error_titled(
             &state.config,
+            &err,
             "Error loading members",
-            layout::INTERNAL_ERROR_MESSAGE,
-         );
-         Ok((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Html(markup.into_string()),
-         )
-            .into_response())
+         ))
       },
    }
 }

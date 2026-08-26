@@ -97,7 +97,7 @@
               (
                 lib.recursiveUpdate {
                   inherit (cfg) cache preferences gifTranscoding;
-                  config = cfg.config // {
+                  config = lib.filterAttrs (_: v: v != null) cfg.config // {
                     hmacKey = "@hmac@";
                     kagiToken = "@kagi@";
                   };
@@ -216,6 +216,34 @@
                 default = true;
               };
               enableDebug = lib.mkEnableOption "request logs and debug endpoints";
+              clientBudget = lib.mkEnableOption "per-client upstream call budget" // {
+                default = true;
+              };
+              trustedProxies = lib.mkOption {
+                type = lib.types.listOf lib.types.str;
+                default = [ ];
+                example = [ "::1" ];
+                description = ''
+                  Peers whose X-Forwarded-For and X-Real-IP headers name the real
+                  client. Any other peer is billed by its socket address, since
+                  those headers are otherwise caller-controlled.
+                '';
+              };
+              clientBudgetMessage = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                description = "Shown when a caller outruns its own budget.";
+              };
+              rateLimitedMessage = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                description = "Shown when the instance is out of upstream quota.";
+              };
+              internalErrorMessage = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                description = "Shown when a request fails for any other reason.";
+              };
               proxy = lib.mkOption {
                 type = lib.types.str;
                 default = "";

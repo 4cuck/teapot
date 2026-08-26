@@ -95,6 +95,12 @@ async fn main() -> eyre::Result<()> {
       config.server.port
    );
 
+   error::set_messages(error::Messages {
+      client_budget:  config.config.client_budget_message.clone(),
+      rate_limited:   config.config.rate_limited_message.clone(),
+      internal_error: config.config.internal_error_message.clone(),
+   });
+
    // Initialize cache
    let cache = Cache::new(config.cache.max_entries);
 

@@ -36,22 +36,25 @@ fn test_config() -> Config {
          max_entries:  50_000,
       },
       config:          AppConfig {
-         hmac_key:            "0123456789abcdef0123456789abcdef".to_owned(),
-         base64_media:        true,
-         enable_rss:          true,
-         client_budget:       false,
-         trusted_proxies:     Vec::new(),
-         enable_debug:        false,
-         debug_token:         String::new(),
-         proxy:               String::new(),
-         proxy_auth:          String::new(),
-         api_proxy:           String::new(),
-         disable_tid:         false,
-         max_concurrent_reqs: 2,
-         paid_emoji:          ":paid:".to_owned(),
-         ai_emoji:            ":ai:".to_owned(),
-         kagi_token:          String::new(),
-         kagi_token_file:     String::new(),
+         hmac_key:               "0123456789abcdef0123456789abcdef".to_owned(),
+         base64_media:           true,
+         enable_rss:             true,
+         client_budget:          false,
+         trusted_proxies:        Vec::new(),
+         client_budget_message:  None,
+         rate_limited_message:   None,
+         internal_error_message: None,
+         enable_debug:           false,
+         debug_token:            String::new(),
+         proxy:                  String::new(),
+         proxy_auth:             String::new(),
+         api_proxy:              String::new(),
+         disable_tid:            false,
+         max_concurrent_reqs:    2,
+         paid_emoji:             ":paid:".to_owned(),
+         ai_emoji:               ":ai:".to_owned(),
+         kagi_token:             String::new(),
+         kagi_token_file:        String::new(),
       },
       preferences:     PreferencesConfig::default(),
       gif_transcoding: GifTranscodingConfig::default(),
@@ -234,7 +237,7 @@ fn activity_payload_marks_sensitive_media() {
    let activity = build_activity_pub(&status, &test_config());
 
    assert!(activity.sensitive);
-   assert!(activity.spoiler_text.is_empty());
+   assert_eq!(activity.spoiler_text.len(), 0);
    assert_eq!(activity.media_attachments.len(), 1);
 }
 

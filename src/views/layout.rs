@@ -15,7 +15,6 @@ use crate::{
 
 pub const STYLE_CSS: &str = "/css/style.css";
 pub const FONTELLO_CSS: &str = "/css/fontello.css";
-pub const INTERNAL_ERROR_MESSAGE: &str = "An internal service error occurred.";
 
 /// Builder for rendering a full page layout.
 #[expect(

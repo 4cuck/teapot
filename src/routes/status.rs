@@ -27,9 +27,12 @@ use tweet_view::{
    thread_context,
 };
 
-use super::helpers::{
-   get_cached_translation,
-   get_cached_tweet,
+use super::{
+   helpers,
+   helpers::{
+      get_cached_translation,
+      get_cached_tweet,
+   },
 };
 use crate::{
    AppState,
@@ -275,15 +278,7 @@ async fn status(
          let markup = layout::render_error(&state.config, "Tweet not found", &msg);
          Ok((StatusCode::NOT_FOUND, Html(markup.into_string())).into_response())
       },
-      Err(err) => {
-         tracing::error!(error = ?err, "failed to render status");
-         let markup = layout::render_error(&state.config, "Error", layout::INTERNAL_ERROR_MESSAGE);
-         Ok((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Html(markup.into_string()),
-         )
-            .into_response())
-      },
+      Err(err) => Ok(helpers::api_error(&state.config, &err)),
    }
 }
 
@@ -541,15 +536,7 @@ async fn status_by_id(
          let markup = layout::render_error(&state.config, "Tweet not found", &msg);
          Ok((StatusCode::NOT_FOUND, Html(markup.into_string())).into_response())
       },
-      Err(err) => {
-         tracing::error!(error = ?err, "failed to render status by ID");
-         let markup = layout::render_error(&state.config, "Error", layout::INTERNAL_ERROR_MESSAGE);
-         Ok((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Html(markup.into_string()),
-         )
-            .into_response())
-      },
+      Err(err) => Ok(helpers::api_error(&state.config, &err)),
    }
 }
 
@@ -629,15 +616,7 @@ async fn user_by_id(State(state): State<AppState>, Path(id): Path<String>) -> Re
          let markup = layout::PageLayout::new(&state.config, "User Not Found", content).render();
          Ok((StatusCode::NOT_FOUND, Html(markup.into_string())).into_response())
       },
-      Err(err) => {
-         tracing::error!(error = ?err, "failed to load edit history");
-         let markup = layout::render_error(&state.config, "Error", layout::INTERNAL_ERROR_MESSAGE);
-         Ok((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Html(markup.into_string()),
-         )
-            .into_response())
-      },
+      Err(err) => Ok(helpers::api_error(&state.config, &err)),
    }
 }
 

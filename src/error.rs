@@ -1,6 +1,7 @@
 use std::{
    io,
    result,
+   sync::OnceLock,
 };
 
 use axum::{
@@ -23,6 +24,67 @@ use crate::{
 };
 
 pub type Result<T> = result::Result<T, Error>;
+
+/// Operator-facing wording, shared by the error page and by `?` propagation so
+/// the two cannot drift.
+#[derive(Debug, Default)]
+pub struct Messages {
+   pub client_budget:  Option<String>,
+   pub rate_limited:   Option<String>,
+   pub internal_error: Option<String>,
+}
+
+static MESSAGES: OnceLock<Messages> = OnceLock::new();
+
+/// Install the configured wording. Called once at startup.
+pub fn set_messages(messages: Messages) {
+   let _ = MESSAGES.set(messages);
+}
+
+fn configured() -> &'static Messages {
+   static EMPTY: Messages = Messages {
+      client_budget:  None,
+      rate_limited:   None,
+      internal_error: None,
+   };
+   MESSAGES.get().unwrap_or(&EMPTY)
+}
+
+pub const CLIENT_BUDGET_MESSAGE: &str = "You are requesting uncached pages faster than this \
+                                         instance can fetch them. Cached pages still work.";
+pub const RATE_LIMITED_MESSAGE: &str =
+   "This instance has reached its upstream rate limit. Please try again later.";
+pub const INTERNAL_ERROR_MESSAGE: &str = "An internal service error occurred.";
+pub const UNAVAILABLE_MESSAGE: &str = "The service has no available upstream sessions.";
+
+#[must_use]
+pub fn client_budget_message() -> &'static str {
+   configured()
+      .client_budget
+      .as_deref()
+      .unwrap_or(CLIENT_BUDGET_MESSAGE)
+}
+
+#[must_use]
+pub fn rate_limited_message() -> &'static str {
+   configured()
+      .rate_limited
+      .as_deref()
+      .unwrap_or(RATE_LIMITED_MESSAGE)
+}
+
+#[must_use]
+pub const fn unavailable_message() -> &'static str {
+   UNAVAILABLE_MESSAGE
+}
+
+#[must_use]
+pub fn internal_error_message() -> &'static str {
+   configured()
+      .internal_error
+      .as_deref()
+      .unwrap_or(INTERNAL_ERROR_MESSAGE)
+}
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -81,44 +143,65 @@ pub enum Error {
    Internal(String),
 }
 
+impl Error {
+   /// Status, heading and reader-facing text for this failure.
+   #[must_use]
+   pub fn presentation(&self) -> (StatusCode, &'static str, &str) {
+      match *self {
+         Self::NotFound(ref message)
+         | Self::UserNotFound(ref message)
+         | Self::TweetNotFound(ref message) => (StatusCode::NOT_FOUND, "Not found", message),
+         Self::UserSuspended(ref message) => (StatusCode::FORBIDDEN, "Suspended", message),
+         Self::ProtectedUser(ref message) => (StatusCode::FORBIDDEN, "Protected", message),
+         Self::InvalidUrl(ref message) => (StatusCode::BAD_REQUEST, "Bad request", message),
+         Self::HmacVerification => {
+            (
+               StatusCode::FORBIDDEN,
+               "Forbidden",
+               "The media URL signature is invalid.",
+            )
+         },
+         Self::ClientBudgetExhausted => {
+            (
+               StatusCode::TOO_MANY_REQUESTS,
+               "Slow down",
+               client_budget_message(),
+            )
+         },
+         Self::RateLimited => {
+            (
+               StatusCode::TOO_MANY_REQUESTS,
+               "Rate limited",
+               rate_limited_message(),
+            )
+         },
+         // Out of sessions is an operator problem, not an upstream quota one.
+         Self::NoSessions | Self::SessionRejected(_) => {
+            (
+               StatusCode::SERVICE_UNAVAILABLE,
+               "Unavailable",
+               unavailable_message(),
+            )
+         },
+         _ => {
+            (
+               StatusCode::INTERNAL_SERVER_ERROR,
+               "Error",
+               internal_error_message(),
+            )
+         },
+      }
+   }
+}
+
 impl IntoResponse for Error {
    fn into_response(self) -> Response {
-      let status = match &self {
-         &Self::NotFound(_) | &Self::UserNotFound(_) | &Self::TweetNotFound(_) => {
-            StatusCode::NOT_FOUND
-         },
-         &Self::RateLimited | &Self::ClientBudgetExhausted => StatusCode::TOO_MANY_REQUESTS,
-         &Self::InvalidUrl(_) => StatusCode::BAD_REQUEST,
-         &Self::NoSessions | &Self::SessionRejected(_) => StatusCode::SERVICE_UNAVAILABLE,
-         &Self::UserSuspended(_) | &Self::ProtectedUser(_) | &Self::HmacVerification => {
-            StatusCode::FORBIDDEN
-         },
-         _ => StatusCode::INTERNAL_SERVER_ERROR,
-      };
+      let (status, _, msg) = self.presentation();
 
       if status.is_server_error() {
          tracing::error!(error = ?self, "request failed");
       }
 
-      // Render styled error page
-      let msg = match &self {
-         &Self::NotFound(ref message)
-         | &Self::UserNotFound(ref message)
-         | &Self::TweetNotFound(ref message)
-         | &Self::UserSuspended(ref message)
-         | &Self::ProtectedUser(ref message)
-         | &Self::InvalidUrl(ref message) => message.as_str(),
-         &Self::RateLimited => "Upstream rate limit reached; please try again later.",
-         &Self::ClientBudgetExhausted => {
-            "You are requesting uncached pages faster than this instance can fetch them. Cached \
-             pages still work; please slow down."
-         },
-         &Self::HmacVerification => "The media URL signature is invalid.",
-         &Self::NoSessions | &Self::SessionRejected(_) => {
-            "The service has no available upstream sessions."
-         },
-         _ => "An internal service error occurred.",
-      };
       let html = format!(
          r#"<!DOCTYPE html>
 <html>

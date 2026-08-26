@@ -7,7 +7,6 @@ use axum::{
       Query,
       State,
    },
-   http::StatusCode,
    response::{
       Html,
       IntoResponse as _,
@@ -19,9 +18,12 @@ use axum_extra::extract::CookieJar;
 use maud::html;
 use serde::Deserialize;
 
-use super::helpers::{
-   extract_timeline,
-   get_cached_user,
+use super::{
+   helpers,
+   helpers::{
+      extract_timeline,
+      get_cached_user,
+   },
 };
 use crate::{
    AppState,
@@ -30,7 +32,6 @@ use crate::{
       keys as cache_keys,
       ttl,
    },
-   config::Config,
    error::{
       Error,
       Result,
@@ -237,47 +238,8 @@ async fn user_timeline(
 
          Ok(Html(markup.into_string()).into_response())
       },
-      Err(err) => Ok(profile_error(&state.config, &err)),
+      Err(err) => Ok(helpers::api_error_titled(&state.config, &err, "Error")),
    }
-}
-
-/// Render a failed profile request.
-///
-/// A spent client budget and a spent upstream budget both mean "come back
-/// later" but have different causes, so they are reported separately rather
-/// than collapsing into the generic error page.
-fn profile_error(config: &Config, err: &Error) -> Response {
-   let (status, title, message) = match *err {
-      Error::UserNotFound(ref msg) => (StatusCode::NOT_FOUND, "User not found", msg.as_str()),
-      Error::ClientBudgetExhausted => {
-         tracing::debug!("profile timeline refused, client budget exhausted");
-         (
-            StatusCode::TOO_MANY_REQUESTS,
-            "Slow down",
-            "You are requesting uncached pages faster than this instance can fetch them. Cached \
-             pages still work.",
-         )
-      },
-      Error::RateLimited => {
-         tracing::warn!("profile timeline refused, upstream rate limit");
-         (
-            StatusCode::TOO_MANY_REQUESTS,
-            "Rate limited",
-            "This instance has reached its upstream rate limit. Please try again later.",
-         )
-      },
-      _ => {
-         tracing::error!(error = ?err, "failed to load profile timeline");
-         (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Error",
-            layout::INTERNAL_ERROR_MESSAGE,
-         )
-      },
-   };
-
-   let markup = layout::render_error(config, title, message);
-   (status, Html(markup.into_string())).into_response()
 }
 
 /// Shared handler for user sub-tab timelines (replies, media).
@@ -371,15 +333,7 @@ async fn user_tab_handler(
             .render();
          Ok(Html(markup.into_string()).into_response())
       },
-      Err(err) => {
-         tracing::error!(error = ?err, "failed to load timeline");
-         let markup = layout::render_error(&state.config, "Error", layout::INTERNAL_ERROR_MESSAGE);
-         Ok((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Html(markup.into_string()),
-         )
-            .into_response())
-      },
+      Err(err) => Ok(helpers::api_error(&state.config, &err)),
    }
 }
 
@@ -500,17 +454,11 @@ async fn user_search(
          Ok(Html(markup.into_string()).into_response())
       },
       Err(err) => {
-         tracing::error!(error = ?err, "failed to search user timeline");
-         let markup = layout::render_error(
+         Ok(helpers::api_error_titled(
             &state.config,
+            &err,
             "Search Error",
-            layout::INTERNAL_ERROR_MESSAGE,
-         );
-         Ok((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Html(markup.into_string()),
-         )
-            .into_response())
+         ))
       },
    }
 }

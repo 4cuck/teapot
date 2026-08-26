@@ -1,6 +1,10 @@
 use axum::{
-   http::header,
+   http::{
+      StatusCode,
+      header,
+   },
    response::{
+      Html,
       IntoResponse as _,
       Response,
    },
@@ -12,7 +16,11 @@ use crate::{
       keys as cache_keys,
       ttl,
    },
-   error::Result,
+   config::Config,
+   error::{
+      Error,
+      Result,
+   },
    types::{
       Conversation,
       Timeline,
@@ -21,6 +29,7 @@ use crate::{
       Tweets,
       User,
    },
+   views::layout,
 };
 
 #[derive(Clone)]
@@ -124,4 +133,36 @@ pub fn cache_rss(state: &AppState, key: &str, rss: &str, min_id: Option<i64>) {
 /// thread (parent → reply chain) from a single `profile-conversation-*` entry.
 pub fn extract_timeline(timeline: Timeline) -> (Vec<Tweets>, Option<String>) {
    (timeline.content, timeline.bottom)
+}
+
+/// Render a failed API request.
+///
+/// Running out of this caller's budget, running out of the instance's upstream
+/// quota, and an actual fault are three different things to the reader, so they
+/// get distinct statuses and messages rather than one generic error page.
+pub fn api_error(config: &Config, err: &Error) -> Response {
+   api_error_titled(config, err, "Error")
+}
+
+/// [`api_error`] with the title used when the failure has no better one.
+pub fn api_error_titled(config: &Config, err: &Error, generic: &str) -> Response {
+   let (status, title, message) = classify_error(err, generic);
+
+   if status.is_server_error() {
+      tracing::error!(error = ?err, "request failed");
+   } else if status == StatusCode::TOO_MANY_REQUESTS {
+      tracing::debug!(error = ?err, "request refused");
+   }
+
+   let markup = layout::render_error(config, title, message);
+   (status, Html(markup.into_string())).into_response()
+}
+
+fn classify_error<'a>(err: &'a Error, generic: &'a str) -> (StatusCode, &'a str, &'a str) {
+   let (status, title, message) = err.presentation();
+   if status == StatusCode::INTERNAL_SERVER_ERROR {
+      (status, generic, message)
+   } else {
+      (status, title, message)
+   }
 }

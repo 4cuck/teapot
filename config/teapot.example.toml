@@ -31,6 +31,18 @@ enableRSS = true
 # static assets are never charged, since they cost no upstream call.
 clientBudget = true
 
+# Peers whose X-Forwarded-For and X-Real-IP name the real client. Anything not
+# listed is billed by its socket address, so behind a reverse proxy this MUST
+# list that proxy or every visitor shares one budget. The header is read right
+# to left past trusted hops, since proxies append rather than replace.
+trustedProxies = [  ]
+
+# Shown when a caller outruns its own budget, when the instance is out of
+# upstream quota, and when a request fails outright.
+# clientBudgetMessage = "..."
+# rateLimitedMessage = "..."
+# internalErrorMessage = "..."
+
 # Enable debug endpoints (/.health, /.sessions)
 enableDebug = false
 

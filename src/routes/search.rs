@@ -6,10 +6,7 @@ use axum::{
       RawQuery,
       State,
    },
-   http::{
-      StatusCode,
-      header::CONTENT_TYPE,
-   },
+   http::header::CONTENT_TYPE,
    response::{
       Html,
       IntoResponse as _,
@@ -21,6 +18,7 @@ use axum::{
 use axum_extra::extract::CookieJar;
 use serde::Deserialize;
 
+use super::helpers;
 use crate::{
    AppState,
    error::Result,
@@ -290,17 +288,11 @@ async fn search(
             Ok(Html(markup.into_string()).into_response())
          },
          Err(err) => {
-            tracing::error!(error = ?err, "tweet search failed");
-            let markup = layout::render_error(
+            Ok(helpers::api_error_titled(
                &state.config,
+               &err,
                "Search Error",
-               layout::INTERNAL_ERROR_MESSAGE,
-            );
-            Ok((
-               StatusCode::INTERNAL_SERVER_ERROR,
-               Html(markup.into_string()),
-            )
-               .into_response())
+            ))
          },
       }
    } else {
@@ -380,17 +372,11 @@ async fn search(
             Ok(Html(markup.into_string()).into_response())
          },
          Err(err) => {
-            tracing::error!(error = ?err, "user search failed");
-            let markup = layout::render_error(
+            Ok(helpers::api_error_titled(
                &state.config,
+               &err,
                "Search Error",
-               layout::INTERNAL_ERROR_MESSAGE,
-            );
-            Ok((
-               StatusCode::INTERNAL_SERVER_ERROR,
-               Html(markup.into_string()),
-            )
-               .into_response())
+            ))
          },
       }
    }
