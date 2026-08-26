@@ -21,9 +21,10 @@ use tokio::sync::{
    Mutex,
    RwLock,
 };
-use xitter_txid::ClientTransaction;
+use xitter_txid::transaction::ClientTransaction;
 
 use super::{
+   auth::SessionPool,
    endpoints,
    http::HttpClient,
 };
@@ -33,17 +34,22 @@ use super::{
 pub struct TidClient {
    inner:      Arc<RwLock<Option<ClientTransaction>>>,
    http:       HttpClient,
+   sessions:   SessionPool,
    last_fetch: Arc<Mutex<Instant>>,
 }
 
 /// How often to refresh the TID client.
 const REFRESH_INTERVAL: Duration = Duration::from_hours(1);
 
+/// How long to wait before retrying a failed bootstrap.
+const RETRY_INTERVAL: Duration = Duration::from_mins(5);
+
 impl TidClient {
-   pub fn new(http: HttpClient) -> Self {
+   pub fn new(http: HttpClient, sessions: SessionPool) -> Self {
       Self {
          inner: Arc::new(RwLock::new(None)),
          http,
+         sessions,
          last_fetch: Arc::new(Mutex::new(
             Instant::now().checked_sub(REFRESH_INTERVAL).unwrap(),
          )),
@@ -80,6 +86,10 @@ impl TidClient {
          },
          Err(err) => {
             tracing::warn!("Failed to refresh TID client: {err}");
+            // Back off, or a persistent failure re-bootstraps on every request.
+            *last = Instant::now()
+               .checked_sub(REFRESH_INTERVAL.saturating_sub(RETRY_INTERVAL))
+               .unwrap_or_else(Instant::now);
          },
       }
    }
@@ -87,12 +97,41 @@ impl TidClient {
    /// Fetch the x.com homepage and ondemand JS to create a new
    /// [`ClientTransaction`].
    async fn fetch_client(&self) -> Result<ClientTransaction, String> {
-      let mut ua_header = HeaderMap::new();
-      ua_header.insert(header::USER_AGENT, endpoints::USER_AGENT.parse().unwrap());
+      let mut headers = HeaderMap::new();
+      headers.insert(header::USER_AGENT, endpoints::USER_AGENT.parse().unwrap());
+      headers.insert(
+         header::ACCEPT,
+         header::HeaderValue::from_static(
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+         ),
+      );
+      headers.insert(
+         "sec-fetch-dest",
+         header::HeaderValue::from_static("document"),
+      );
+      headers.insert(
+         "sec-fetch-mode",
+         header::HeaderValue::from_static("navigate"),
+      );
+      headers.insert("sec-fetch-site", header::HeaderValue::from_static("none"));
+
+      // Logged-out visitors get a stripped shell built from a different bundle
+      // that carries no chunk manifest, so the bootstrap needs a session cookie
+      // to reach the client-web app the transaction ID is derived from.
+      let cookie = self
+         .sessions
+         .cookie_header()
+         .ok_or("no cookie session available for TID bootstrap")?;
+      headers.insert(
+         header::COOKIE,
+         cookie
+            .parse()
+            .map_err(|_| "invalid cookie header value".to_owned())?,
+      );
 
       let home_html = self
          .http
-         .get_with_headers("https://x.com", &ua_header)
+         .get_with_headers("https://x.com", &headers)
          .await
          .map_err(|err| format!("fetch x.com: {err}"))?
          .text()
@@ -104,7 +143,7 @@ impl TidClient {
 
       let js_text = self
          .http
-         .get_with_headers(&js_url, &ua_header)
+         .get_with_headers(&js_url, &headers)
          .await
          .map_err(|err| format!("fetch ondemand JS: {err}"))?
          .text()

@@ -284,6 +284,22 @@ impl SessionPool {
       self.sessions.is_empty()
    }
 
+   /// Cookie header for a cookie session, for requests that fetch x.com's web
+   /// app rather than the API. Takes no concurrency permit, since those pages
+   /// are outside the per-session API rate limits.
+   pub(crate) fn cookie_header(&self) -> Option<String> {
+      self
+         .sessions
+         .iter()
+         .map(|slot| &slot.credentials)
+         .find(|creds| {
+            creds.kind == SessionKind::Cookie
+               && !creds.auth_token.is_empty()
+               && !creds.ct0.is_empty()
+         })
+         .map(|creds| format!("auth_token={}; ct0={}", creds.auth_token, creds.ct0))
+   }
+
    /// Get health statistics about the session pool.
    #[expect(
       clippy::iter_over_hash_type,

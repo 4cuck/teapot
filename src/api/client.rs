@@ -270,7 +270,7 @@ impl ApiClient {
       let client =
          HttpClient::new(api_proxy, &config.config.proxy_auth).with_default_headers(headers);
 
-      let tid = TidClient::new(client.clone());
+      let tid = TidClient::new(client.clone(), sessions.clone());
 
       Self {
          client,
