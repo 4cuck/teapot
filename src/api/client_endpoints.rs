@@ -1,4 +1,8 @@
+use std::collections::BTreeMap;
+
 use super::{
+   AboutAccountData,
+   AccountContext,
    ApiClient,
    Article,
    AudioSpaceData,
@@ -34,6 +38,7 @@ use super::{
    audio_space_status,
    broadcast_id_from_url,
    broadcast_status,
+   clamp_community_value,
    endpoints,
    header,
    hosted_by,
@@ -58,6 +63,104 @@ impl ApiClient {
          )
          .await?;
       parser::parse_user(&data)
+   }
+
+   /// Read X's About Account record.
+   pub async fn get_account_context(&self, screen_name: &str) -> Result<AccountContext> {
+      let about = self
+         .graphql_request::<AboutAccountData>(
+            endpoints::GRAPH_ABOUT_ACCOUNT,
+            &endpoints::about_account_vars(screen_name),
+            endpoints::GQL_FEATURES,
+            None,
+         )
+         .await?;
+
+      let Some(raw) = about
+         .user_result_by_screen_name
+         .and_then(|nested| nested.result)
+      else {
+         return Ok(AccountContext::default());
+      };
+
+      let returned = raw
+         .core
+         .as_ref()
+         .and_then(|core| core.screen_name.as_deref());
+      if returned.is_some_and(|name| !name.eq_ignore_ascii_case(screen_name)) {
+         return Ok(AccountContext::default());
+      }
+
+      Ok(raw
+         .about_profile
+         .map_or_else(AccountContext::default, |profile| {
+            AccountContext {
+               account_based_in:  profile.account_based_in.unwrap_or_default(),
+               connection_source: profile.source.unwrap_or_default(),
+               location_accurate: profile.location_accurate,
+            }
+         }))
+   }
+
+   /// Batch-read the same data from X-Posed's public cache, which costs no X
+   /// quota.
+   pub async fn get_community_account_contexts(
+      &self,
+      screen_names: &[String],
+   ) -> Result<BTreeMap<String, AccountContext>> {
+      #[derive(Deserialize, Default)]
+      #[serde(default)]
+      struct CachedAccount {
+         #[serde(rename = "l")]
+         location: Option<String>,
+         #[serde(rename = "d")]
+         device:   Option<String>,
+         #[serde(rename = "a")]
+         accurate: Option<bool>,
+      }
+
+      #[derive(Deserialize, Default)]
+      #[serde(default)]
+      struct Lookup {
+         results: BTreeMap<String, CachedAccount>,
+      }
+
+      let mut contexts = BTreeMap::new();
+      for batch in screen_names.chunks(100) {
+         let uri = format!(
+            "{}?users={}",
+            endpoints::X_POSED_LOOKUP_URL,
+            batch.join(",")
+         );
+         let response = timeout(Duration::from_secs(5), self.client.get(&uri))
+            .await
+            .map_err(|_| Error::Internal("X-Posed community cache timed out".to_owned()))??;
+         if !response.status().is_success() {
+            return Err(Error::Internal(format!(
+               "X-Posed community cache returned {}",
+               response.status()
+            )));
+         }
+
+         let bytes = response.bytes_limited(1024 * 1024).await?;
+         let lookup: Lookup = serde_json::from_slice(&bytes)
+            .map_err(|err| Error::Internal(format!("X-Posed community cache: {err}")))?;
+         for (username, info) in lookup.results {
+            let username = username.to_lowercase();
+            if !batch.contains(&username) {
+               continue;
+            }
+            let context = AccountContext {
+               account_based_in:  clamp_community_value(info.location),
+               connection_source: clamp_community_value(info.device),
+               location_accurate: info.accurate,
+            };
+            if !context.is_empty() {
+               contexts.insert(username, context);
+            }
+         }
+      }
+      Ok(contexts)
    }
 
    /// Get user by REST ID (numeric user ID).
