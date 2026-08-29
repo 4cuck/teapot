@@ -155,11 +155,35 @@ impl Error {
    #[must_use]
    pub fn presentation(&self) -> (StatusCode, &'static str, &str) {
       match *self {
-         Self::NotFound(ref message)
-         | Self::UserNotFound(ref message)
-         | Self::TweetNotFound(ref message) => (StatusCode::NOT_FOUND, "Not found", message),
-         Self::UserSuspended(ref message) => (StatusCode::FORBIDDEN, "Suspended", message),
-         Self::ProtectedUser(ref message) => (StatusCode::FORBIDDEN, "Protected", message),
+         Self::NotFound(ref message) => (StatusCode::NOT_FOUND, "Not found", message),
+         Self::UserNotFound(_) => {
+            (
+               StatusCode::NOT_FOUND,
+               "Account not found",
+               "No account exists with that name, or X has removed it.",
+            )
+         },
+         Self::TweetNotFound(_) => {
+            (
+               StatusCode::NOT_FOUND,
+               "Post not found",
+               "That post has been deleted, or the account that made it is gone.",
+            )
+         },
+         Self::UserSuspended(_) => {
+            (
+               StatusCode::FORBIDDEN,
+               "Account suspended",
+               "X has suspended this account, so its posts are not available here.",
+            )
+         },
+         Self::ProtectedUser(_) => {
+            (
+               StatusCode::FORBIDDEN,
+               "Protected account",
+               "This account's posts are only visible to followers it has approved.",
+            )
+         },
          Self::InvalidUrl(ref message) => (StatusCode::BAD_REQUEST, "Bad request", message),
          Self::HmacVerification => {
             (

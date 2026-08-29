@@ -82,15 +82,15 @@ pub fn render_profile_with_prefs(
            @if profile.user.suspended {
                div class="timeline-container" {
                    div class="timeline-header" {
-                       h2 { "Account suspended" }
-                       p { "Twitter suspends accounts that violate the Twitter Rules." }
+                       h2 { "@" (profile.user.username) " is suspended" }
+                       p { "X has suspended this account, so its posts are not available here." }
                    }
                }
            } @else if profile.user.protected {
                div class="timeline-container" {
                    div class="timeline-header timeline-protected" {
-                       h2 { "This account's tweets are protected." }
-                       p { "Only confirmed followers have access to @" (profile.user.username) "'s tweets." }
+                       h2 { "@" (profile.user.username) " is protected" }
+                       p { "Only followers this account has approved can see its posts." }
                    }
                }
            } @else {
