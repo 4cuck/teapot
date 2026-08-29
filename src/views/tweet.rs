@@ -251,6 +251,7 @@ impl<'a> TweetRenderer<'a> {
                                   (link_user(&display_tweet.user, "fullname"))
                                   (verified_icon(&display_tweet.user))
                                   (link_user(&display_tweet.user, "username"))
+                                  (render_tweet_account_signal(&display_tweet.user))
                               }
 
                               span class="tweet-date" {
@@ -751,6 +752,39 @@ fn render_user_avatar(user: &User, config: &Config, prefs: Option<&Prefs>) -> Ma
    let avatar_class = get_avatar_class(prefs);
    html! {
        img src=(avatar_url) class=(avatar_class) alt="" loading="lazy";
+   }
+}
+
+/// Inline country marker beside a poster's name, expanding to the same detail
+/// the profile panel shows.
+fn render_tweet_account_signal(user: &User) -> Markup {
+   if user.account_based_in.is_empty() {
+      return Markup::default();
+   }
+
+   html! {
+       details class="tweet-account-trigger" {
+           summary class="tweet-account-location" title="Show X-reported account information" {
+               span class="account-signal-dot" {}
+               (user.account_based_in)
+               @if user.location_accurate == Some(false) {
+                   span class="tweet-account-warning"
+                        title="X says this location may be affected by a proxy or VPN" { "!" }
+               }
+           }
+           div class="tweet-account-popover" {
+               strong { (user.account_based_in) }
+               @if !user.connection_source.is_empty() {
+                   span { "Connected via " (user.connection_source) }
+               }
+               @if user.location_accurate == Some(false) {
+                   span class="tweet-account-popover-warning" {
+                       "Location may be affected by a proxy or VPN."
+                   }
+               }
+               small { "Account-level information, not a live location or per-post device." }
+           }
+       }
    }
 }
 

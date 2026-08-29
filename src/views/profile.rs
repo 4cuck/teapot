@@ -172,7 +172,64 @@ fn render_stat(num: i64, class: &str, text: &str) -> Markup {
    }
 }
 
-/// Render user card (profile sidebar).
+/// X's "About this account" panel, collapsed behind the country it reports.
+fn render_account_context(user: &User) -> Markup {
+   if user.account_based_in.is_empty() && user.connection_source.is_empty() {
+      return Markup::default();
+   }
+
+   html! {
+       details class="account-context-trigger" {
+           summary class="account-signal" title="Show X-reported account information" {
+               span class="account-signal-info" aria-hidden="true" { "i" }
+               span class="sr-only" { "Account based in" }
+               strong {
+                   @if user.account_based_in.is_empty() {
+                       "Unknown"
+                   } @else {
+                       (user.account_based_in)
+                   }
+               }
+               @if user.location_accurate == Some(false) {
+                   span class="account-signal-warning"
+                        title="X says this location may be affected by a proxy or VPN" { "!" }
+               }
+           }
+           section class="account-context" aria-label="About this account" {
+               div class="account-context-header" {
+                   div { h3 { "About this account" } }
+                   span class="account-context-mark" aria-hidden="true" { "i" }
+               }
+               dl {
+                   @if !user.account_based_in.is_empty() {
+                       div class="account-context-row" {
+                           dt { "Account based in" }
+                           dd { (user.account_based_in) }
+                       }
+                   }
+                   @if !user.connection_source.is_empty() {
+                       div class="account-context-row" {
+                           dt { "Connected via" }
+                           dd { (user.connection_source) }
+                       }
+                   }
+               }
+               @if user.location_accurate == Some(false) {
+                   p class="account-context-warning" {
+                       span aria-hidden="true" { "!" }
+                       " X says this location may be affected by a proxy or VPN."
+                   }
+               }
+               p class="account-context-note" {
+                   "Account-level information from X, not a live location or the device used "
+                   "for a specific post."
+               }
+           }
+       }
+   }
+}
+
+/// Render user card.
 fn render_user_card(user: &User, config: &Config, prefs: Option<&Prefs>) -> Markup {
    let avatar_class = get_avatar_class(prefs);
 
@@ -205,6 +262,7 @@ fn render_user_card(user: &User, config: &Config, prefs: Option<&Prefs>) -> Mark
                    (verified_icon(user))
                }
                (link_user(user, "profile-card-username"))
+               (render_account_context(user))
            }
 
            div class="profile-card-extra" {
