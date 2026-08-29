@@ -125,9 +125,11 @@ fn render_thread(thread: &[&Tweet], config: &Config, prefs: Option<&Prefs>) -> M
                @let has_header = tweet.pinned || tweet.retweet.is_some();
                @let thread_class = match (has_header, is_last) {
                    (true, true) => "with-header thread thread-last",
-                   (true, false) => "with-header thread",
+                   (true, false) if idx == 0 => "with-header thread thread-first",
+                   (true, false) => "with-header thread thread-middle",
                    (false, true) => "thread thread-last",
-                   (false, false) => "thread",
+                   (false, false) if idx == 0 => "thread thread-first",
+                   (false, false) => "thread thread-middle",
                };
                (TweetRenderer::new(tweet, config, false).maybe_prefs(prefs).extra_class(thread_class).index(idx).render())
                @if show_thread && tweet.has_thread {
