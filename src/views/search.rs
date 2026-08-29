@@ -21,13 +21,22 @@ use crate::{
 /// Render the empty search page (home search bar).
 pub fn render_search_page() -> Markup {
    html! {
-       div class="panel-container" {
-           div class="search-bar" {
-               form method="get" action="/search" autocomplete="off" {
+       section class="landing-page" aria-labelledby="landing-title" {
+           div class="landing-copy" {
+               span class="landing-kicker" { "Private by default" }
+               h1 id="landing-title" { "Find what people are talking about." }
+               p { "Search public posts without ads, tracking, or an account." }
+           }
+           div class="landing-search" {
+               form method="get" action="/search" autocomplete="off" role="search" {
                    input type="hidden" name="f" value="tweets";
-                   input type="text" name="q" autofocus="" placeholder="Search..." dir="auto";
-                   button type="submit" { span class="icon-search" {} }
+                   label for="home-search" class="sr-only" { "Search public posts" }
+                   span class="icon-search landing-search-icon" aria-hidden="true" {}
+                   input id="home-search" type="text" name="q" autofocus=""
+                       placeholder="Search posts, people, or topics" dir="auto";
+                   button type="submit" { "Search" }
                }
+               p class="landing-hint" { "Try a phrase, @username, or #topic" }
            }
        }
    }
@@ -49,7 +58,7 @@ pub fn render_search_results_with_prefs(
    active_tab: &str,
 ) -> Markup {
    html! {
-       div class="timeline-container" {
+       div class="timeline-container search-results" {
            div class="timeline-header" {
                (render_search_panel_with_action(query, filters, "/search"))
            }
@@ -65,9 +74,7 @@ pub fn render_search_results_with_prefs(
                }
 
                @if tweets.is_empty() {
-                   div class="timeline-header" {
-                       h2 class="timeline-none" { "No items found" }
-                   }
+                   div class="search-empty" { "No posts found" }
                } @else {
                    @for tweet in tweets {
                        (TweetRenderer::new(tweet, config, false).maybe_prefs(prefs).render())
@@ -100,9 +107,9 @@ pub fn render_user_search_results(
    prefs: Option<&Prefs>,
 ) -> Markup {
    html! {
-       div class="timeline-container" {
+       div class="timeline-container search-results" {
            div class="timeline-header" {
-               form method="get" action="/search" class="search-field" autocomplete="off" {
+               form method="get" action="/search" class="search-field user-search-field" autocomplete="off" {
                    input type="hidden" name="f" value="users";
                    div class="pref-group pref-input pref-inline" {
                        input type="text" name="q" value=(query) placeholder="Enter username...";
@@ -122,9 +129,7 @@ pub fn render_user_search_results(
                }
 
                @if users.is_empty() {
-                   div class="timeline-header" {
-                       h2 class="timeline-none" { "No items found" }
-                   }
+                   div class="search-empty" { "No people found" }
                } @else {
                    @for user in users {
                        (render_user(user, config, prefs))
@@ -244,25 +249,25 @@ pub fn render_search_panel_with_action(
            }
 
            div class="search-panel" {
-               // Filter section
-               @for prefix in &["filter", "exclude"] {
-                   @let cap = {
-                       let mut chars = prefix.chars();
-                       chars.next().map_or_else(String::new, |ch| format!("{}{}", ch.to_uppercase(), chars.as_str()))
-                   };
-                   span class="search-title" { (cap) }
-                   div class="search-toggles" {
-                       @let pfx = &prefix[..1];
-                       (gen_search_checkbox(&format!("{pfx}-nativeretweets"), "Retweets", false))
-                       (gen_search_checkbox(&format!("{pfx}-media"), "Media", if *prefix == "filter" { filt.media } else { false }))
-                       (gen_search_checkbox(&format!("{pfx}-videos"), "Videos", if *prefix == "filter" { filt.videos } else { false }))
-                       (gen_search_checkbox(&format!("{pfx}-news"), "News", if *prefix == "filter" { filt.news } else { false }))
-                       (gen_search_checkbox(&format!("{pfx}-native_video"), "Native videos", false))
-                       (gen_search_checkbox(&format!("{pfx}-replies"), "Replies", if *prefix == "exclude" { filt.exclude_replies } else { false }))
-                       (gen_search_checkbox(&format!("{pfx}-links"), "Links", if *prefix == "filter" { filt.links } else { false }))
-                       (gen_search_checkbox(&format!("{pfx}-images"), "Images", if *prefix == "filter" { filt.images } else { false }))
-                       (gen_search_checkbox(&format!("{pfx}-quote"), "Quotes", if *prefix == "filter" { filt.quote } else { false }))
-                       (gen_search_checkbox(&format!("{pfx}-spaces"), "Spaces", false))
+               div class="search-filter-groups" {
+                   @for prefix in &["filter", "exclude"] {
+                       fieldset class="search-filter-group" {
+                           legend { (if *prefix == "filter" { "Include" } else { "Exclude" }) }
+                           p { (if *prefix == "filter" { "Only show posts containing:" } else { "Hide posts containing:" }) }
+                           div class="search-toggles" {
+                               @let pfx = &prefix[..1];
+                               (gen_search_checkbox(&format!("{pfx}-nativeretweets"), "Retweets", false))
+                               (gen_search_checkbox(&format!("{pfx}-media"), "Media", if *prefix == "filter" { filt.media } else { false }))
+                               (gen_search_checkbox(&format!("{pfx}-videos"), "Videos", if *prefix == "filter" { filt.videos } else { false }))
+                               (gen_search_checkbox(&format!("{pfx}-news"), "News", if *prefix == "filter" { filt.news } else { false }))
+                               (gen_search_checkbox(&format!("{pfx}-native_video"), "Native videos", false))
+                               (gen_search_checkbox(&format!("{pfx}-replies"), "Replies", if *prefix == "exclude" { filt.exclude_replies } else { false }))
+                               (gen_search_checkbox(&format!("{pfx}-links"), "Links", if *prefix == "filter" { filt.links } else { false }))
+                               (gen_search_checkbox(&format!("{pfx}-images"), "Images", if *prefix == "filter" { filt.images } else { false }))
+                               (gen_search_checkbox(&format!("{pfx}-quote"), "Quotes", if *prefix == "filter" { filt.quote } else { false }))
+                               (gen_search_checkbox(&format!("{pfx}-spaces"), "Spaces", false))
+                           }
+                       }
                    }
                }
 
