@@ -709,7 +709,8 @@ async fn quotes(
       .search(&search_query, query.cursor.as_deref(), "Latest")
       .await?;
 
-   let groups = timeline.content;
+   let mut groups = timeline.content;
+   helpers::enrich_tweet_groups(&state, &mut groups).await;
    let cursor = timeline.bottom.as_deref();
    let base_url = format!("/{username}/status/{id}/quotes");
 

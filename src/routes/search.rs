@@ -1,3 +1,5 @@
+use std::slice;
+
 use axum::{
    Router,
    extract::{
@@ -323,7 +325,8 @@ async fn search(
 
       match search_result {
          Ok(timeline) => {
-            let tweets = timeline.content.into_iter().flatten().collect::<Vec<_>>();
+            let mut tweets = timeline.content.into_iter().flatten().collect::<Vec<_>>();
+            helpers::enrich_tweet_groups(&state, slice::from_mut(&mut tweets)).await;
             let cursor = timeline.bottom.as_deref();
 
             // Display the original user query, not the API query

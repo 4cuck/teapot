@@ -187,7 +187,8 @@ async fn user_timeline(
          helpers::apply_account_context(&state, &mut profile_data.user).await;
          // For AJAX scroll requests, return only the tweets HTML
          if is_scroll {
-            let (tweets, cursor) = extract_timeline(profile_data.tweets);
+            let (mut tweets, cursor) = extract_timeline(profile_data.tweets);
+            helpers::enrich_tweet_groups(&state, &mut tweets).await;
             let base_url = format!("/{}", profile_data.user.username);
             let content = timeline::render_timeline_with_prefs(
                &tweets,
@@ -301,7 +302,8 @@ async fn user_tab_handler(
 
    match timeline_result {
       Ok(data) => {
-         let (tweets, next_cursor) = extract_timeline(data);
+         let (mut tweets, next_cursor) = extract_timeline(data);
+         helpers::enrich_tweet_groups(state, &mut tweets).await;
          let base_url = format!("/{username}/{tab_str}");
          let newer = has_request_cursor.then_some(base_url.as_str());
 
@@ -408,7 +410,8 @@ async fn user_search(
 
    match search_result {
       Ok(results) => {
-         let (tweets, cursor) = extract_timeline(results);
+         let (mut tweets, cursor) = extract_timeline(results);
+         helpers::enrich_tweet_groups(&state, &mut tweets).await;
          let base_url = if search_query.is_empty() {
             format!("/{username}/search")
          } else {
@@ -538,10 +541,11 @@ async fn multi_user_timeline(
    let base_url = format!("/{usernames_str}");
 
    let newer = query.cursor.is_some().then_some(base_url.as_str());
-   let groups = all_tweets
+   let mut groups = all_tweets
       .into_iter()
       .map(|tweet| vec![tweet])
       .collect::<Vec<Vec<_>>>();
+   helpers::enrich_tweet_groups(&state, &mut groups).await;
    let content = html! {
        div class="multi-user-timeline" {
            h2 { "Combined timeline: " (usernames.iter().map(|name| format!("@{name}")).collect::<Vec<_>>().join(", ")) }
