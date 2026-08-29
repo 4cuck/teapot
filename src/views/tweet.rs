@@ -541,6 +541,7 @@ fn render_quote(quote: &Tweet, config: &Config, prefs: Option<&Prefs>) -> Markup
                    (link_user(&quote.user, "fullname"))
                    (verified_icon(&quote.user))
                    (link_user(&quote.user, "username"))
+                   (render_tweet_account_signal(&quote.user))
                }
 
                span class="tweet-date" {
@@ -559,6 +560,15 @@ fn render_quote(quote: &Tweet, config: &Config, prefs: Option<&Prefs>) -> Markup
            @if !quote.text.is_empty() {
                div class="quote-text" dir="auto" {
                    (PreEscaped(&text_html))
+               }
+
+               @if quote.is_translatable {
+                   button class="translate-btn"
+                       hx-get=(format!("/translate/{}", quote.id))
+                       hx-swap="outerHTML"
+                       hx-indicator="closest .translate-btn" {
+                       "Translate post"
+                   }
                }
            }
 

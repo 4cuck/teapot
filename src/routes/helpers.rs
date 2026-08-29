@@ -125,22 +125,52 @@ pub async fn account_contexts(
    resolved
 }
 
-/// Decorate every participant in a conversation.
+/// Decorate every author rendered by a conversation.
 pub async fn enrich_conversation(state: &AppState, conversation: &mut Conversation) {
-   let usernames = participants(conversation)
+   let names = tweets(conversation).flat_map(tweet_users).collect();
+   let Some(contexts) = resolve_for(state, names).await else {
+      return;
+   };
+   for tweet in tweets_mut(conversation) {
+      apply_to_tweet(tweet, &contexts);
+   }
+}
+
+/// Decorate every author rendered by a timeline, search page or list.
+pub async fn enrich_tweet_groups(state: &AppState, groups: &mut [Tweets]) {
+   let names = groups
+      .iter()
+      .flatten()
+      .flat_map(tweet_users)
+      .collect::<Vec<_>>();
+   let Some(contexts) = resolve_for(state, names).await else {
+      return;
+   };
+   for tweet in groups.iter_mut().flatten() {
+      apply_to_tweet(tweet, &contexts);
+   }
+}
+
+async fn resolve_for(
+   state: &AppState,
+   users: Vec<&User>,
+) -> Option<BTreeMap<String, AccountContext>> {
+   let mut names = users
+      .into_iter()
       .map(|user| user.username.to_lowercase())
-      .filter(|username| !username.is_empty())
-      .collect::<Vec<String>>();
-   if usernames.is_empty() {
-      return;
+      .filter(|name| !name.is_empty())
+      .collect::<Vec<_>>();
+   names.sort_unstable();
+   names.dedup();
+   if names.is_empty() {
+      return None;
    }
+   let contexts = account_contexts(state, &names).await;
+   (!contexts.is_empty()).then_some(contexts)
+}
 
-   let contexts = account_contexts(state, &usernames).await;
-   if contexts.is_empty() {
-      return;
-   }
-
-   for user in participants_mut(conversation) {
+fn apply_to_tweet(tweet: &mut Tweet, contexts: &BTreeMap<String, AccountContext>) {
+   let apply = |user: &mut User| {
       if let Some(context) = contexts.get(&user.username.to_lowercase()) {
          user.account_based_in.clone_from(&context.account_based_in);
          user
@@ -148,10 +178,34 @@ pub async fn enrich_conversation(state: &AppState, conversation: &mut Conversati
             .clone_from(&context.connection_source);
          user.location_accurate = context.location_accurate;
       }
+   };
+   apply(&mut tweet.user);
+   if let Some(quote) = tweet.quote.as_deref_mut() {
+      apply(&mut quote.user);
+   }
+   if let Some(retweet) = tweet.retweet.as_deref_mut() {
+      apply(&mut retweet.user);
+      if let Some(quote) = retweet.quote.as_deref_mut() {
+         apply(&mut quote.user);
+      }
    }
 }
 
-fn participants(conversation: &Conversation) -> impl Iterator<Item = &User> {
+fn tweet_users(tweet: &Tweet) -> Vec<&User> {
+   let mut users = vec![&tweet.user];
+   if let Some(quote) = tweet.quote.as_deref() {
+      users.push(&quote.user);
+   }
+   if let Some(retweet) = tweet.retweet.as_deref() {
+      users.push(&retweet.user);
+      if let Some(quote) = retweet.quote.as_deref() {
+         users.push(&quote.user);
+      }
+   }
+   users
+}
+
+fn tweets(conversation: &Conversation) -> impl Iterator<Item = &Tweet> {
    iter::once(&conversation.tweet)
       .chain(&conversation.before.content)
       .chain(&conversation.after.content)
@@ -162,10 +216,9 @@ fn participants(conversation: &Conversation) -> impl Iterator<Item = &User> {
             .iter()
             .flat_map(|chain| chain.content.iter()),
       )
-      .map(|tweet| &tweet.user)
 }
 
-fn participants_mut(conversation: &mut Conversation) -> impl Iterator<Item = &mut User> {
+fn tweets_mut(conversation: &mut Conversation) -> impl Iterator<Item = &mut Tweet> {
    iter::once(&mut conversation.tweet)
       .chain(&mut conversation.before.content)
       .chain(&mut conversation.after.content)
@@ -176,7 +229,6 @@ fn participants_mut(conversation: &mut Conversation) -> impl Iterator<Item = &mu
             .iter_mut()
             .flat_map(|chain| chain.content.iter_mut()),
       )
-      .map(|tweet| &mut tweet.user)
 }
 
 async fn community_contexts(
