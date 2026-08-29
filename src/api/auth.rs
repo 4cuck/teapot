@@ -373,8 +373,7 @@ impl SessionPool {
          }
       }
 
-      // If every usable session is busy, queue on the next non-limited one. If
-      // all are rate-limited, use the session whose reset is earliest.
+      // Every usable session is busy, so queue on the next non-limited one.
       let chosen = eligible
          .iter()
          .find(|slot| {
@@ -385,17 +384,7 @@ impl SessionPool {
                })
          })
          .copied()
-         .or_else(|| {
-            eligible.iter().copied().min_by_key(|slot| {
-               limits
-                  .get(&slot.credentials.id)
-                  .and_then(|session_limits| {
-                     session_limits.apis.get(api_for(slot.credentials.kind))
-                  })
-                  .map_or(i64::MAX, |rate| rate.reset)
-            })
-         })
-         .ok_or(Error::NoSessions)?;
+         .ok_or(Error::RateLimited)?;
       let credentials = Arc::clone(&chosen.credentials);
       let permits = Arc::clone(&chosen.permits);
       drop(limits);
