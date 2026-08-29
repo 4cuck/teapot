@@ -13,8 +13,8 @@ body {
   background-color: var(--bg_color);
   color: var(--fg_color);
   font-family: var(--font-family);
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: 15px;
+  line-height: 1.45;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
@@ -35,8 +35,8 @@ a:hover {
 nav {
   display: flex;
   align-items: center;
-  background-color: var(--bg_color);
-  border-bottom: 1px solid var(--border_grey);
+  background: color-mix(in srgb, var(--bg_color) 92%, transparent);
+  backdrop-filter: blur(12px);
   height: 56px;
   width: 100%;
   flex: none;
@@ -44,22 +44,39 @@ nav {
 
 .inner-nav {
   margin: auto;
-  padding: 0 16px;
+  padding: 0 20px;
   display: flex;
   align-items: center;
-  max-width: 600px;
-  width: 100%;
+  width: min(100%, 1040px);
   height: 56px;
 }
 
+.site-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--fg_color);
+  min-width: 0;
+}
+
+.site-brand:hover {
+  text-decoration: none;
+}
+
+.site-logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+}
+
 .site-name {
-  font-size: 16px;
-  font-weight: 500;
-  color: var(--accent);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--fg_color);
 }
 
 .site-name:hover {
-  color: var(--accent_light);
   text-decoration: none;
 }
 
@@ -74,7 +91,7 @@ nav {
 .card {
   background-color: var(--bg_panel);
   border: 1px solid var(--border_grey);
-  border-radius: var(--shape-md);
+  border-radius: 8px;
   padding: 32px;
   max-width: 480px;
   width: 100%;
@@ -108,7 +125,7 @@ details {
   text-align: left;
   margin: 16px 0;
   background-color: var(--bg_elements);
-  border-radius: var(--shape-sm);
+  border-radius: 6px;
   padding: 12px 14px;
 }
 
@@ -128,8 +145,10 @@ details p {
   background-color: var(--bg_elements);
   color: var(--fg_color);
   border: 1px solid var(--border_grey);
-  border-radius: var(--shape-sm);
-  padding: 8px 18px;
+  border-radius: 6px;
+  padding: 0 18px;
+  min-height: 40px;
+  line-height: 40px;
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
