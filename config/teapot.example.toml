@@ -60,6 +60,11 @@ apiProxy = ""
 # Enable this if cookie-based auth is failing
 disableTid = false
 
+# Read about-account data from X-Posed's public cache before asking X, saving a
+# call on the scarcest rate-limit tier. Discloses the usernames being viewed to
+# a third party. teapot never contributes to it.
+xPosedCommunityCache = false
+
 # Max requests per session to avoid race conditions
 maxConcurrentReqs = 2
 
