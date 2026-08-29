@@ -33,7 +33,7 @@ pub fn router() -> Router<AppState> {
 
 async fn home(State(state): State<AppState>, jar: CookieJar) -> impl IntoResponse {
    let prefs = Prefs::from_cookies(&jar, &state.config);
-   let content = search_view::render_search_page();
+   let content = search_view::render_search_page(&state.config);
 
    let markup = PageLayout::new(&state.config, "Home", content)
       .description("A privacy-focused Twitter/X frontend")

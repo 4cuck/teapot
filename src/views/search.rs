@@ -19,9 +19,13 @@ use crate::{
 };
 
 /// Render the empty search page (home search bar).
-pub fn render_search_page() -> Markup {
+pub fn render_search_page(config: &Config) -> Markup {
    html! {
        section class="landing-page" {
+           div class="landing-brand" {
+               img class="landing-logo" src="/logo.svg" alt="";
+               span class="landing-name" { (config.server.title) }
+           }
            div class="landing-search" {
                form method="get" action="/search" autocomplete="off" role="search" {
                    input type="hidden" name="f" value="tweets";

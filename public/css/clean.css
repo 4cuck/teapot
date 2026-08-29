@@ -55,10 +55,10 @@ nav {
 .site-logo { width: 28px; height: 28px; border-radius: 6px; }
 .site-name { color: var(--text); font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
 .nav-item { height: 56px; line-height: normal; }
+.inner-nav > .nav-item.right { gap: 2px; }
 .nav-icon { width: 38px; height: 38px; border-radius: 6px; }
 .nav-icon:hover { background: var(--bg_hover); color: var(--text); }
-.inner-nav > .nav-item.right { display: none; }
-.mobile-nav { display: block; position: relative; }
+.mobile-nav { display: none; position: relative; }
 .mobile-nav > summary {
   display: grid;
   width: 38px;
@@ -238,6 +238,8 @@ main .container {
 .tweet-account-popover small { padding-top: 6px; border-top: 1px solid var(--line); color: var(--muted); font-size: 9px; }
 
 .attachments, .quote, .card, .poll, .community-note { border-radius: 8px; }
+
+.quote .translate-btn { position: relative; z-index: 2; }
 .still-image { cursor: zoom-in; }
 .image-lightbox {
   position: fixed;
@@ -809,9 +811,24 @@ input[type="text"], input[type="date"], input[type="number"], select {
   margin: 0 auto;
   padding: 24px;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 28px;
   text-align: center;
+}
+.landing-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: clamp(12px, 2.5vw, 22px);
+}
+.landing-logo { width: auto; height: clamp(78px, 15vw, 122px); }
+.landing-name {
+  color: var(--text);
+  font-size: clamp(42px, 9vw, 74px);
+  font-weight: 700;
+  letter-spacing: -.02em;
+  line-height: 1;
 }
 .landing-search { width: 100%; max-width: 650px; }
 .landing-search form {
@@ -820,7 +837,7 @@ input[type="text"], input[type="date"], input[type="number"], select {
   align-items: center;
   gap: 10px;
   min-height: 62px;
-  padding: 8px 8px 8px 18px;
+  padding: 8px;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface);
@@ -844,10 +861,27 @@ input[type="text"], input[type="date"], input[type="number"], select {
 .landing-search input[type="text"]:focus { outline: 0; box-shadow: none; }
 .landing-search button { min-width: 104px; min-height: 46px; border-radius: 8px; }
 
+.overlay-panel {
+  max-width: var(--feed-width);
+  margin: 0 auto;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+}
+.overlay-panel h1 { display: block; margin: 0 0 4px; font-size: 24px; font-weight: 700; letter-spacing: -.02em; }
+.overlay-panel h2 { margin: 28px 0 8px; font-size: 17px; font-weight: 650; color: var(--text); }
+.overlay-panel p { margin: 0 0 12px; color: var(--muted); }
+.overlay-panel ul { margin: 0 0 12px; padding-left: 20px; color: var(--muted); }
+.overlay-panel li { margin-bottom: 4px; }
+.overlay-panel a { color: var(--accent); }
+
 .preferences-panel {
   position: relative;
   max-width: 720px;
   margin: 0 auto;
+  padding: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
@@ -867,6 +901,8 @@ input[type="text"], input[type="date"], input[type="number"], select {
   main .container { padding: 68px 0 32px; }
   .inner-nav { padding: 0 12px; }
   .site-name { display: none; }
+  .inner-nav > .nav-item.right { display: none; }
+  .mobile-nav { display: block; }
   .profile-tabs { display: block; }
   .profile-tab, .profile-tab.sticky { position: static; margin-bottom: 12px; }
   .profile-banner, .profile-card, .photo-rail-card, .tab, .timeline, .timeline-none, .timeline-protected, .timeline-end, .preferences-panel { border-left: 0; border-right: 0; border-radius: 0; }
@@ -877,7 +913,7 @@ input[type="text"], input[type="date"], input[type="number"], select {
   .search-panel { border-radius: 0; }
   .preferences-panel { max-width: none; margin: 0; }
   .landing-page { min-height: calc(100vh - 100px); padding: 20px; }
-  .landing-search form { grid-template-columns: auto minmax(0, 1fr); padding: 8px 14px; }
+  .landing-search form { grid-template-columns: auto minmax(0, 1fr); padding: 8px; }
   .landing-search button { grid-column: 1 / -1; width: 100%; }
   .search-filter-groups { grid-template-columns: 1fr; }
   .search-results .search-field #search-panel-toggle:checked ~ .search-panel { max-height: 3000px !important; }
@@ -909,11 +945,10 @@ input[type="text"], input[type="date"], input[type="number"], select {
 }
 
 .timeline > .thread-line {
-  margin: 10px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  overflow: hidden;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 6%, var(--surface)), var(--surface) 42%);
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--surface);
 }
 
 .timeline > .thread-line > .timeline-item {
@@ -922,57 +957,28 @@ input[type="text"], input[type="date"], input[type="number"], select {
 }
 
 .timeline > .thread-line > .timeline-item + .timeline-item {
-  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-top: 0;
 }
 
 .thread-line .timeline-item.thread {
   position: relative;
-  padding-left: 18px;
 }
 
-/* A connector anchored to the avatars communicates author → reply without
-   becoming a second scrollbar. */
 .thread-line .timeline-item.thread:not(.thread-last)::after {
   content: "";
   position: absolute;
-  z-index: 2;
-  left: 40px;
-  top: 62px;
-  bottom: -15px;
+  z-index: 1;
+  left: 38px;
+  top: 68px;
+  bottom: -16px;
   width: 2px;
-  border-radius: 2px;
-  background: linear-gradient(var(--accent), color-mix(in srgb, var(--accent) 35%, var(--line)));
+  background: var(--line);
   pointer-events: none;
 }
 
 .thread-line .timeline-item.thread .tweet-avatar img {
   position: relative;
-  z-index: 3;
-  outline: 3px solid var(--surface);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, var(--line));
-}
-
-.thread-line .timeline-item.thread:not(.thread-first) .tweet-header::before {
-  content: "reply";
-  display: inline-flex;
-  align-items: center;
-  height: 18px;
-  margin: 0 7px 4px 0;
-  padding: 0 6px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 13%, transparent);
-  color: var(--accent);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: .06em;
-  text-transform: uppercase;
-  vertical-align: middle;
-}
-
-.thread-line .timeline-item.thread:not(.thread-first) .tweet-name-row {
-  display: inline-flex;
-  width: calc(100% - 48px);
-  vertical-align: middle;
+  z-index: 2;
 }
 
 .thread-line .more-replies-thread {
