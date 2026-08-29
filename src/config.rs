@@ -123,11 +123,11 @@ pub struct AppConfig {
    #[serde(default, rename = "trustedProxies")]
    pub trusted_proxies:        Vec<String>,
    #[serde(default, rename = "rateLimitedMessage")]
-   pub rate_limited_message:   Option<String>,
+   pub rate_limited_message:   Vec<String>,
    #[serde(default, rename = "clientBudgetMessage")]
-   pub client_budget_message:  Option<String>,
+   pub client_budget_message:  Vec<String>,
    #[serde(default, rename = "internalErrorMessage")]
-   pub internal_error_message: Option<String>,
+   pub internal_error_message: Vec<String>,
    #[serde(default, rename = "enableDebug")]
    pub enable_debug:           bool,
    #[serde(default, rename = "debugToken")]

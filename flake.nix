@@ -82,6 +82,7 @@
         }:
         let
           cfg = config.services.teapot;
+          messageType = lib.types.listOf lib.types.str;
           configFile = (pkgs.formats.toml { }).generate "teapot.toml" (
             lib.recursiveUpdate {
               inherit (cfg) cache preferences gifTranscoding;
@@ -216,19 +217,23 @@
                 '';
               };
               clientBudgetMessage = lib.mkOption {
-                type = lib.types.nullOr lib.types.str;
-                default = null;
-                description = "Shown when a caller outruns its own budget.";
+                type = messageType;
+                default = [ ];
+                example = [
+                  "Slow down."
+                  "Still too fast."
+                ];
+                description = "Shown when a caller outruns its own budget. A list is rotated through.";
               };
               rateLimitedMessage = lib.mkOption {
-                type = lib.types.nullOr lib.types.str;
-                default = null;
-                description = "Shown when the instance is out of upstream quota.";
+                type = messageType;
+                default = [ ];
+                description = "Shown when the instance is out of upstream quota. A list is rotated through.";
               };
               internalErrorMessage = lib.mkOption {
-                type = lib.types.nullOr lib.types.str;
-                default = null;
-                description = "Shown when a request fails for any other reason.";
+                type = messageType;
+                default = [ ];
+                description = "Shown when a request fails for any other reason. A list is rotated through.";
               };
               proxy = lib.mkOption {
                 type = lib.types.str;

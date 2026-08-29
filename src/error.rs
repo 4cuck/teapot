@@ -1,7 +1,13 @@
 use std::{
    io,
    result,
-   sync::OnceLock,
+   sync::{
+      OnceLock,
+      atomic::{
+         AtomicUsize,
+         Ordering,
+      },
+   },
 };
 
 use axum::{
@@ -29,9 +35,9 @@ pub type Result<T> = result::Result<T, Error>;
 /// the two cannot drift.
 #[derive(Debug, Default)]
 pub struct Messages {
-   pub client_budget:  Option<String>,
-   pub rate_limited:   Option<String>,
-   pub internal_error: Option<String>,
+   pub client_budget:  Vec<String>,
+   pub rate_limited:   Vec<String>,
+   pub internal_error: Vec<String>,
 }
 
 static MESSAGES: OnceLock<Messages> = OnceLock::new();
@@ -43,11 +49,21 @@ pub fn set_messages(messages: Messages) {
 
 fn configured() -> &'static Messages {
    static EMPTY: Messages = Messages {
-      client_budget:  None,
-      rate_limited:   None,
-      internal_error: None,
+      client_budget:  Vec::new(),
+      rate_limited:   Vec::new(),
+      internal_error: Vec::new(),
    };
    MESSAGES.get().unwrap_or(&EMPTY)
+}
+
+/// Rotate through the configured wordings, one per refusal.
+fn pick(configured: &'static [String], fallback: &'static str) -> &'static str {
+   static NEXT: AtomicUsize = AtomicUsize::new(0);
+   match *configured {
+      [] => fallback,
+      [ref only] => only,
+      ref many => &many[NEXT.fetch_add(1, Ordering::Relaxed) % many.len()],
+   }
 }
 
 pub const CLIENT_BUDGET_MESSAGE: &str = "You are requesting uncached pages faster than this \
@@ -59,18 +75,12 @@ pub const UNAVAILABLE_MESSAGE: &str = "The service has no available upstream ses
 
 #[must_use]
 pub fn client_budget_message() -> &'static str {
-   configured()
-      .client_budget
-      .as_deref()
-      .unwrap_or(CLIENT_BUDGET_MESSAGE)
+   pick(&configured().client_budget, CLIENT_BUDGET_MESSAGE)
 }
 
 #[must_use]
 pub fn rate_limited_message() -> &'static str {
-   configured()
-      .rate_limited
-      .as_deref()
-      .unwrap_or(RATE_LIMITED_MESSAGE)
+   pick(&configured().rate_limited, RATE_LIMITED_MESSAGE)
 }
 
 #[must_use]
@@ -80,10 +90,7 @@ pub const fn unavailable_message() -> &'static str {
 
 #[must_use]
 pub fn internal_error_message() -> &'static str {
-   configured()
-      .internal_error
-      .as_deref()
-      .unwrap_or(INTERNAL_ERROR_MESSAGE)
+   pick(&configured().internal_error, INTERNAL_ERROR_MESSAGE)
 }
 
 #[derive(Error, Debug)]
