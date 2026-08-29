@@ -577,6 +577,21 @@ pub struct UserData {
    pub profile_bio:         Option<ProfileBio>,
    pub verification:        Option<Verification>,
    pub privacy:             Option<Privacy>,
+   pub about_profile:       Option<AboutProfile>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct AboutProfile {
+   pub account_based_in:  Option<String>,
+   pub source:            Option<String>,
+   pub location_accurate: Option<bool>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct AboutAccountData {
+   pub user_result_by_screen_name: Option<NestedResult<UserData>>,
 }
 
 #[derive(Deserialize, Default)]
