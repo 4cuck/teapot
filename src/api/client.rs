@@ -600,7 +600,7 @@ impl ApiClient {
          self.sessions.mark_rejected(session.id).await;
          return Err(Error::SessionRejected(msg.clone()));
       }
-      if matches!(api_check, Err(Error::RateLimited)) {
+      if !limit_recorded && matches!(api_check, Err(Error::RateLimited)) {
          self
             .sessions
             .mark_endpoint_limited(session.id, endpoint)
