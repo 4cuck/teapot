@@ -6,6 +6,10 @@ pub fn profile(username: &str) -> String {
    format!("p:{}", username.to_lowercase())
 }
 
+pub fn account_context(username: &str) -> String {
+   format!("ac:{}", username.to_lowercase())
+}
+
 pub fn timeline(username: &str, kind: &str) -> String {
    format!("tl:{}:{kind}", username.to_lowercase())
 }
