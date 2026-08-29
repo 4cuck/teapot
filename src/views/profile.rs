@@ -167,9 +167,36 @@ fn render_stat(num: i64, class: &str, text: &str) -> Markup {
    html! {
        li class=(class) {
            span class="profile-stat-header" { (display_text) }
-           span class="profile-stat-num" { (formatters::format_with_commas(num)) }
+           span class="profile-stat-num" title=(formatters::format_with_commas(num)) {
+               (compact_profile_stat(num))
+           }
        }
    }
+}
+
+/// Abbreviate a stat so the sidebar columns stay aligned. The exact figure
+/// stays reachable through the element's title.
+fn compact_profile_stat(num: i64) -> String {
+   #[expect(
+      clippy::cast_precision_loss,
+      reason = "display only, and the abbreviation rounds anyway"
+   )]
+   let value = num.unsigned_abs() as f64;
+   let (scaled, suffix) = if value >= 1_000_000_000.0 {
+      (value / 1_000_000_000.0, "B")
+   } else if value >= 1_000_000.0 {
+      (value / 1_000_000.0, "M")
+   } else if value >= 1_000.0 {
+      (value / 1_000.0, "K")
+   } else {
+      return num.to_string();
+   };
+   let precision = usize::from(scaled < 100.0);
+   let compact = format!("{scaled:.precision$}")
+      .trim_end_matches('0')
+      .trim_end_matches('.')
+      .to_owned();
+   format!("{}{compact}{suffix}", if num < 0 { "-" } else { "" })
 }
 
 /// X's "About this account" panel, collapsed behind the country it reports.
@@ -353,7 +380,8 @@ fn render_banner(banner: &str, config: &Config) -> Markup {
 
 /// Render photo rail showing recent media.
 fn render_photo_rail(photos: &[GalleryPhoto], user: &User, config: &Config) -> Markup {
-   let count = formatters::format_with_commas(user.media);
+   let count = compact_profile_stat(user.media);
+   let exact_count = formatters::format_with_commas(user.media);
 
    html! {
        div class="photo-rail-card" {
@@ -361,7 +389,7 @@ fn render_photo_rail(photos: &[GalleryPhoto], user: &User, config: &Config) -> M
                a href=(format!("/{}/media", user.username)) {
                    span class="photo-rail-icon-wrap" {
                        span class="icon-picture photo-rail-media-icon" aria-hidden="true" {}
-                       span class="photo-rail-media-badge" { (count) }
+                       span class="photo-rail-media-badge" title=(exact_count) { (&count) }
                    }
                    span class="photo-rail-media-label" { "Media" }
                }
@@ -373,7 +401,7 @@ fn render_photo_rail(photos: &[GalleryPhoto], user: &User, config: &Config) -> M
                div class="photo-rail-header-mobile-inner" {
                    span class="photo-rail-icon-wrap" {
                        span class="icon-picture photo-rail-media-icon" aria-hidden="true" {}
-                       span class="photo-rail-media-badge" { (count) }
+                       span class="photo-rail-media-badge" title=(exact_count) { (&count) }
                    }
                    span { "Media" }
                }
@@ -381,7 +409,7 @@ fn render_photo_rail(photos: &[GalleryPhoto], user: &User, config: &Config) -> M
            }
 
            div class="photo-rail-grid" {
-               @for photo in photos.iter().take(10) {
+               @for photo in photos.iter().take(16) {
                    @let photo_suffix = if photo.url.contains("format") || photo.url.contains("placeholder") { "" } else { ":thumb" };
                    a href=(format!("/{}/status/{}#m", user.username, photo.tweet_id)) {
                        (gen_img(&format!("{}{}", photo.url, photo_suffix), "", config))
