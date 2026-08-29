@@ -1,0 +1,89 @@
+body {
+  --bg_color:    #121214;
+  --fg_color:    #A0A0AF;
+  --fg_faded:    #606069;
+  --fg_dark:     #A0A0AF;
+  --fg_nav:      #A0A0AF;
+
+  --bg_panel:    #171719;
+  --bg_elements: #1F1F21;
+  --bg_overlays: #252527;
+  --bg_hover:    #252527;
+
+  --grey:        #606069;
+  /* --dark_grey:   #2A2A2C; */
+  --darker_grey: #2A2A2C;
+  --darkest_grey:#2A2A2C;
+  --border_grey: #3A3A3C;
+
+  --accent:        #A0A0AF;
+  --accent_light:  #B8B8C7;
+  --accent_dark:   #888899;
+  --accent_border: #2A2A2C;
+
+  --play_button:       #A0A0AF;
+  --play_button_hover: #B8B8C7;
+  --more_replies_dots: #A0A0AF;
+  --error_red:         #2A2028;
+
+  --verified_blue:       #6C81B8;
+  --verified_business:   #A68170;
+  --verified_government: #8a8a8a;
+  --icon_text:           #171719;
+
+  --tab:          #606069;
+  --tab_selected: #A0A0AF;
+  --profile_stat: #A0A0AF;
+
+  --shadow:      rgba(0, 0, 0, 0.24);
+  --shadow_dark: rgba(0, 0, 0, 0.36);
+
+  --tp-primary:              var(--accent);
+  --tp-on-primary:           var(--icon_text);
+  --tp-primary-container:    var(--accent_border);
+  --tp-on-primary-container: var(--fg_nav);
+
+  --tp-secondary:              var(--accent_dark);
+  --tp-on-secondary:           var(--icon_text);
+  --tp-secondary-container:    var(--dark_grey);
+  --tp-on-secondary-container: var(--fg_faded);
+
+  --tp-surface:                    var(--bg_color);
+  --tp-surface-dim:                var(--bg_panel);
+  --tp-surface-container-lowest:   var(--bg_color);
+  --tp-surface-container-low:      var(--bg_panel);
+  --tp-surface-container:          var(--bg_elements);
+  --tp-surface-container-high:     var(--bg_overlays);
+  --tp-surface-container-highest:  var(--darkest_grey);
+  --tp-on-surface:                 var(--fg_color);
+  --tp-on-surface-variant:         var(--fg_faded);
+
+  --tp-outline:         var(--border_grey);
+  --tp-outline-variant: var(--dark_grey);
+
+  --tp-error:             #A67E97;
+  --tp-error-container:   var(--error_red);
+  --tp-on-error-container:var(--fg_color);
+
+  --tp-accent-red:     #A67E97;
+  --tp-accent-green:   #738980;
+  --tp-accent-yellow:  var(--verified_business);
+  --tp-accent-blue:    var(--verified_blue);
+  --tp-accent-magenta: #6E6DA7;
+  --tp-accent-cyan:    #55787D;
+
+  --shape-none: 0px;
+  --shape-xs: 2px;
+  --shape-sm: 3px;
+  --shape-md: 4px;
+  --shape-lg: 6px;
+  --shape-xl: 8px;
+  --shape-full: 9999px;
+
+  --elevation-0: none;
+  --elevation-1: 0 1px 2px rgba(0, 0, 0, 0.24), 0 1px 3px rgba(0, 0, 0, 0.12);
+  --elevation-2: 0 2px 4px rgba(0, 0, 0, 0.24), 0 2px 6px rgba(0, 0, 0, 0.16);
+  --elevation-3: 0 4px 8px rgba(0, 0, 0, 0.32), 0 4px 12px rgba(0, 0, 0, 0.20);
+
+  --font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif, Twemoji;
+}
