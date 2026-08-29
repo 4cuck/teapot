@@ -98,7 +98,7 @@ async fn about(State(state): State<AppState>, jar: CookieJar) -> impl IntoRespon
 
            h2 { "Instance info" }
            p {
-               "Version: teapot"
+               "Version: teapot " (env!("CARGO_PKG_VERSION"))
            }
        }
    };
