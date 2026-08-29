@@ -519,8 +519,109 @@ impl ApiClient {
          }
          format!("{base_url}/{endpoint}?{}", qs.finish())
       };
+      let headers = self
+         .graphql_headers(
+            session,
+            base_url,
+            endpoint,
+            variables,
+            features,
+            field_toggles,
+         )
+         .await?;
 
-      // Build auth + extra headers
+      let response = self.client.get_with_headers(&url, &headers).await?;
+
+      // Check rate limit headers
+      let limit_recorded = if let Some(remaining) = response.headers().get("x-rate-limit-remaining")
+         && let Ok(remaining_str) = remaining.to_str()
+         && let Ok(remaining_val) = remaining_str.parse::<i32>()
+      {
+         let limit = response
+            .headers()
+            .get("x-rate-limit-limit")
+            .and_then(|hv| hv.to_str().ok())
+            .and_then(|sv| sv.parse().ok())
+            .unwrap_or(0);
+         let reset = response
+            .headers()
+            .get("x-rate-limit-reset")
+            .and_then(|hv| hv.to_str().ok())
+            .and_then(|sv| sv.parse().ok())
+            .unwrap_or(0);
+
+         self
+            .sessions
+            .update_session_limit(session.id, endpoint, limit, remaining_val, reset)
+            .await;
+         remaining_val <= 0 && reset > time::OffsetDateTime::now_utc().unix_timestamp()
+      } else {
+         false
+      };
+
+      if !response.status().is_success() {
+         let status = response.status();
+         let body = response.text().await.unwrap_or_default();
+         tracing::error!(
+            session_id = session.id,
+            session_user = %session.username,
+            "API request failed: {status} - {body}"
+         );
+
+         if status.as_u16() == 429 {
+            if !limit_recorded {
+               self
+                  .sessions
+                  .mark_endpoint_limited(session.id, endpoint)
+                  .await;
+            }
+            return Err(Error::RateLimited);
+         }
+
+         // Only 401 means the credentials themselves were refused. A 403 is an
+         // authenticated request denied a particular resource.
+         if status.as_u16() == 401 {
+            self.sessions.mark_rejected(session.id).await;
+            return Err(Error::SessionRejected(format!("Status {status}: {body}")));
+         }
+
+         return Err(Error::TwitterApi(format!("Status {status}: {body}")));
+      }
+
+      let bytes = response.bytes().await?;
+
+      // Check for API errors before full deserialization.
+      // Mark the session as limited on token errors so the retry picks
+      // a different one.
+      let api_check = Self::check_api_errors(&bytes);
+      if let Err(Error::TwitterApi(ref msg)) = api_check
+         && msg.starts_with("Invalid token")
+      {
+         self.sessions.mark_rejected(session.id).await;
+         return Err(Error::SessionRejected(msg.clone()));
+      }
+      if matches!(api_check, Err(Error::RateLimited)) {
+         self
+            .sessions
+            .mark_endpoint_limited(session.id, endpoint)
+            .await;
+      }
+      api_check?;
+
+      let resp = serde_json::from_slice::<GqlResponse<T>>(&bytes)
+         .map_err(|err| Error::Internal(format!("Response parse error: {err}")))?;
+      Ok(resp.data)
+   }
+
+   async fn graphql_headers(
+      &self,
+      session: &SessionLease,
+      base_url: &str,
+      endpoint: &str,
+      variables: &str,
+      features: &str,
+      field_toggles: Option<&str>,
+   ) -> Result<header::HeaderMap> {
       let mut headers = header::HeaderMap::new();
 
       match session.kind {
@@ -615,87 +716,7 @@ impl ApiClient {
          header::HeaderValue::from_static("en"),
       );
 
-      let response = self.client.get_with_headers(&url, &headers).await?;
-
-      // Check rate limit headers
-      let limit_recorded = if let Some(remaining) = response.headers().get("x-rate-limit-remaining")
-         && let Ok(remaining_str) = remaining.to_str()
-         && let Ok(remaining_val) = remaining_str.parse::<i32>()
-      {
-         let limit = response
-            .headers()
-            .get("x-rate-limit-limit")
-            .and_then(|hv| hv.to_str().ok())
-            .and_then(|sv| sv.parse().ok())
-            .unwrap_or(0);
-         let reset = response
-            .headers()
-            .get("x-rate-limit-reset")
-            .and_then(|hv| hv.to_str().ok())
-            .and_then(|sv| sv.parse().ok())
-            .unwrap_or(0);
-
-         self
-            .sessions
-            .update_session_limit(session.id, endpoint, limit, remaining_val, reset)
-            .await;
-         remaining_val <= 0 && reset > time::OffsetDateTime::now_utc().unix_timestamp()
-      } else {
-         false
-      };
-
-      if !response.status().is_success() {
-         let status = response.status();
-         let body = response.text().await.unwrap_or_default();
-         tracing::error!(
-            session_id = session.id,
-            session_user = %session.username,
-            "API request failed: {status} - {body}"
-         );
-
-         if status.as_u16() == 429 {
-            if !limit_recorded {
-               self
-                  .sessions
-                  .mark_endpoint_limited(session.id, endpoint)
-                  .await;
-            }
-            return Err(Error::RateLimited);
-         }
-
-         // Only 401 means the credentials themselves were refused. A 403 is an
-         // authenticated request denied a particular resource.
-         if status.as_u16() == 401 {
-            self.sessions.mark_rejected(session.id).await;
-            return Err(Error::SessionRejected(format!("Status {status}: {body}")));
-         }
-
-         return Err(Error::TwitterApi(format!("Status {status}: {body}")));
-      }
-
-      let bytes = response.bytes().await?;
-
-      // Check for API errors before full deserialization.
-      // Mark the session as limited on token errors so the retry picks
-      // a different one.
-      let api_check = Self::check_api_errors(&bytes);
-      if let Err(Error::TwitterApi(ref msg)) = api_check
-         && msg.starts_with("Invalid token")
-      {
-         self.sessions.mark_rejected(session.id).await;
-         return Err(Error::SessionRejected(msg.clone()));
-      }
-      if matches!(api_check, Err(Error::RateLimited)) {
-         self
-            .sessions
-            .mark_endpoint_limited(session.id, endpoint)
-            .await;
-      }
-      api_check?;
-
-      let resp = serde_json::from_slice::<GqlResponse<T>>(&bytes)
-         .map_err(|err| Error::Internal(format!("Response parse error: {err}")))?;
-      Ok(resp.data)
+      Ok(headers)
    }
 
    async fn cookie_json_request<T>(&self, session_key: &str, api_path: &str, url: &str) -> Result<T>
