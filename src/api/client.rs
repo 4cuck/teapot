@@ -580,6 +580,7 @@ impl ApiClient {
       endpoint: &str,
       response: super::http::Response,
    ) -> Result<(bytes::Bytes, bool)> {
+      let account_scoped = response.headers().contains_key("x-rate-limit-remaining");
       let limit_recorded = if let Some(remaining) = response.headers().get("x-rate-limit-remaining")
          && let Ok(remaining_str) = remaining.to_str()
          && let Ok(remaining_val) = remaining_str.parse::<i32>()
@@ -612,15 +613,22 @@ impl ApiClient {
          tracing::error!(
             session_id = session.id,
             session_user = %session.username,
+            account_scoped,
             "API request failed: {status} - {body}"
          );
 
          if status.as_u16() == 429 {
-            if !limit_recorded {
-               self
-                  .sessions
-                  .mark_endpoint_limited(session.id, endpoint)
-                  .await;
+            // An edge 429 carries no `x-rate-limit-*` headers, so it is aimed
+            // at the address every session shares rather than at this account.
+            if account_scoped {
+               if !limit_recorded {
+                  self
+                     .sessions
+                     .mark_endpoint_limited(session.id, endpoint)
+                     .await;
+               }
+            } else {
+               self.sessions.back_off_edge();
             }
             return Err(Error::RateLimited);
          }

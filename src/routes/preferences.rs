@@ -53,11 +53,11 @@ fn prefs_to_cookies(prefs: &Prefs, config: &Config) -> Vec<Cookie<'static>> {
    let max_age = Duration::days(365);
    let secure = config.server.https;
    let bool_cookie =
-      |name: &str, val: bool| make_cookie(name, if val { "on" } else { "" }, max_age, secure);
-   let str_cookie = |name: &str, val: &str| make_cookie(name, val, max_age, secure);
+      |name: &str, val: bool| make_cookie(name, if val { "on" } else { "" }, max_age, secure, true);
+   let str_cookie = |name: &str, val: &str| make_cookie(name, val, max_age, secure, true);
 
    vec![
-      str_cookie("theme", &prefs.theme),
+      make_cookie("theme", &prefs.theme, max_age, secure, false),
       bool_cookie("infiniteScroll", prefs.infinite_scroll),
       bool_cookie("stickyProfile", prefs.sticky_profile),
       bool_cookie("bidiSupport", prefs.bidi_support),
@@ -132,11 +132,17 @@ fn encode_prefs(prefs: &Prefs, config: &Config) -> String {
    pairs.join(",")
 }
 
-fn make_cookie(name: &str, value: &str, max_age: Duration, secure: bool) -> Cookie<'static> {
+fn make_cookie(
+   name: &str,
+   value: &str,
+   max_age: Duration,
+   secure: bool,
+   http_only: bool,
+) -> Cookie<'static> {
    let mut builder = Cookie::build((name.to_owned(), value.to_owned()))
       .path("/")
       .max_age(max_age)
-      .http_only(true)
+      .http_only(http_only)
       .same_site(SameSite::Lax);
    if secure {
       builder = builder.secure(true);

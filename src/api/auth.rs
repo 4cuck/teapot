@@ -10,6 +10,7 @@ use std::{
    sync::{
       Arc,
       atomic::{
+         AtomicI64,
          AtomicUsize,
          Ordering,
       },
@@ -94,10 +95,11 @@ pub struct SessionDetail {
 /// Pool of authentication sessions for Twitter API.
 #[derive(Clone)]
 pub struct SessionPool {
-   sessions: Vec<Arc<SessionSlot>>,
-   limits:   Arc<RwLock<HashMap<i64, SessionLimits>>>,
-   cursor:   Arc<AtomicUsize>,
-   state:    Option<Arc<LimitState>>,
+   sessions:     Vec<Arc<SessionSlot>>,
+   limits:       Arc<RwLock<HashMap<i64, SessionLimits>>>,
+   cursor:       Arc<AtomicUsize>,
+   state:        Option<Arc<LimitState>>,
+   edge_backoff: Arc<AtomicI64>,
 }
 
 /// Writes the rate-limit map to disk so a restart does not forget which
@@ -109,6 +111,8 @@ struct LimitState {
 }
 
 const STATE_FLUSH_INTERVAL: Duration = Duration::from_secs(15);
+
+const EDGE_BACKOFF_SECS: i64 = 30;
 
 struct SessionSlot {
    credentials:     Arc<SessionCredentials>,
@@ -196,6 +200,7 @@ impl SessionPool {
          limits: Arc::new(RwLock::new(limits)),
          cursor: Arc::new(AtomicUsize::new(0)),
          state,
+         edge_backoff: Arc::new(AtomicI64::new(0)),
       };
       pool.spawn_flusher();
 
@@ -308,6 +313,25 @@ impl SessionPool {
          .await
    }
 
+   /// Pause the whole pool after X's edge refuses the host rather than the
+   /// account. Every session leaves from one address, so the block is shared
+   /// and flagging the session that happened to draw it walks the rotation.
+   pub fn back_off_edge(&self) {
+      let now = time::OffsetDateTime::now_utc().unix_timestamp();
+      let previous = self
+         .edge_backoff
+         .swap(now + EDGE_BACKOFF_SECS, Ordering::Relaxed);
+      if previous <= now {
+         tracing::warn!(
+            "upstream edge refused the host, pausing all sessions for {EDGE_BACKOFF_SECS}s"
+         );
+      }
+   }
+
+   fn edge_blocked(&self) -> bool {
+      self.edge_backoff.load(Ordering::Relaxed) > time::OffsetDateTime::now_utc().unix_timestamp()
+   }
+
    /// Whether some other session still has budget for `api`.
    ///
    /// Filtered the same way acquisition is, `required_kind` included, so a
@@ -319,6 +343,9 @@ impl SessionPool {
       required_kind: Option<SessionKind>,
       excluded_id: i64,
    ) -> bool {
+      if self.edge_blocked() {
+         return false;
+      }
       let limits = self.limits.read().await;
       self.sessions.iter().any(|slot| {
          slot.credentials.id != excluded_id
@@ -339,6 +366,9 @@ impl SessionPool {
    ) -> Result<SessionLease> {
       if self.sessions.is_empty() {
          return Err(Error::NoSessions);
+      }
+      if self.edge_blocked() {
+         return Err(Error::RateLimited);
       }
 
       let limits = self.limits.read().await;
