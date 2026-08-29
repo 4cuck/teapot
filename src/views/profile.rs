@@ -409,7 +409,7 @@ fn render_photo_rail(photos: &[GalleryPhoto], user: &User, config: &Config) -> M
            }
 
            div class="photo-rail-grid" {
-               @for photo in photos.iter().take(16) {
+               @for photo in photos.iter().take(15) {
                    @let photo_suffix = if photo.url.contains("format") || photo.url.contains("placeholder") { "" } else { ":thumb" };
                    a href=(format!("/{}/status/{}#m", user.username, photo.tweet_id)) {
                        (gen_img(&format!("{}{}", photo.url, photo_suffix), "", config))
