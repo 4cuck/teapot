@@ -394,7 +394,12 @@ impl ApiClient {
          .await;
 
       match first {
-         Err(Error::SessionRejected(_) | Error::RateLimited) => {},
+         Err(Error::SessionRejected(_)) => {},
+         Err(Error::RateLimited)
+            if self
+               .sessions
+               .has_unlimited(endpoint, retry_kind, session_id)
+               .await => {},
          other => return other,
       }
 

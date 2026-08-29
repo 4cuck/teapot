@@ -308,6 +308,29 @@ impl SessionPool {
          .await
    }
 
+   /// Whether some other session still has budget for `api`.
+   ///
+   /// Filtered the same way acquisition is, `required_kind` included, so a
+   /// caller pinned to one kind is not told a replacement exists that
+   /// acquisition will then refuse.
+   pub(crate) async fn has_unlimited(
+      &self,
+      api: &str,
+      required_kind: Option<SessionKind>,
+      excluded_id: i64,
+   ) -> bool {
+      let limits = self.limits.read().await;
+      self.sessions.iter().any(|slot| {
+         slot.credentials.id != excluded_id
+            && required_kind.is_none_or(|kind| slot.credentials.kind == kind)
+            && limits
+               .get(&slot.credentials.id)
+               .is_none_or(|session_limits| {
+                  !session_limits.rejected && !session_limits.is_limited(api)
+               })
+      })
+   }
+
    async fn acquire_with<'a>(
       &self,
       api_for: impl Fn(SessionKind) -> &'a str + Send,
