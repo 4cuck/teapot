@@ -82,32 +82,18 @@
         }:
         let
           cfg = config.services.teapot;
-          configFile = pkgs.writeText "teapot.toml" ''
-            ${lib.generators.toINI
-              {
-                mkKeyValue = lib.generators.mkKeyValueDefault {
-                  mkValueString =
-                    v:
-                    if lib.isString v then
-                      "\"" + (lib.escape [ "\"" ] (toString v)) + "\""
-                    else
-                      lib.generators.mkValueStringDefault { } v;
-                } " = ";
-              }
-              (
-                lib.recursiveUpdate {
-                  inherit (cfg) cache preferences gifTranscoding;
-                  config = lib.filterAttrs (_: v: v != null) cfg.config // {
-                    hmacKey = "@hmac@";
-                    kagiToken = "@kagi@";
-                  };
-                  server = lib.filterAttrs (_: v: v != null) cfg.server // {
-                    staticDir = "${cfg.package}/share/teapot/public";
-                  };
-                } cfg.settings
-              )
-            }
-          '';
+          configFile = (pkgs.formats.toml { }).generate "teapot.toml" (
+            lib.recursiveUpdate {
+              inherit (cfg) cache preferences gifTranscoding;
+              config = lib.filterAttrs (_: v: v != null) cfg.config // {
+                hmacKey = "@hmac@";
+                kagiToken = "@kagi@";
+              };
+              server = lib.filterAttrs (_: v: v != null) cfg.server // {
+                staticDir = "${cfg.package}/share/teapot/public";
+              };
+            } cfg.settings
+          );
           preStart = pkgs.writers.writePython3 "teapot-prestart" { } /* py */ ''
             import os
             import secrets
