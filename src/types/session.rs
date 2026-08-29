@@ -34,7 +34,8 @@ pub struct SessionCredentials {
 }
 
 /// Mutable rate-limit state, stored separately in the pool.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SessionLimits {
    pub limited:    bool,
    pub limited_at: i64,

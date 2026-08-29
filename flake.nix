@@ -374,6 +374,7 @@
                 Environment = [
                   "TEAPOT_CONF_FILE=/var/lib/teapot/teapot.toml"
                   "TEAPOT_SESSIONS_FILE=%d/sessionsFile"
+                  "TEAPOT_SESSION_STATE_FILE=/var/lib/teapot/session-limits.json"
                 ];
                 WorkingDirectory = "${cfg.package}/share/teapot";
                 ExecStart = "${cfg.package}/bin/teapot";

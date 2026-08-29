@@ -1,5 +1,9 @@
 use std::{
-   collections::HashMap,
+   collections::{
+      BTreeMap,
+      HashMap,
+   },
+   env,
    fmt::Write as _,
    ops::Deref,
    path::Path,
@@ -11,6 +15,7 @@ use std::{
       },
    },
    time::{
+      Duration,
       SystemTime,
       UNIX_EPOCH,
    },
@@ -23,10 +28,13 @@ use time::format_description::well_known::Rfc3339;
 use tokio::{
    fs,
    sync::{
+      Mutex,
+      Notify,
       OwnedSemaphorePermit,
       RwLock,
       Semaphore,
    },
+   time::sleep,
 };
 
 use crate::{
@@ -89,7 +97,18 @@ pub struct SessionPool {
    sessions: Vec<Arc<SessionSlot>>,
    limits:   Arc<RwLock<HashMap<i64, SessionLimits>>>,
    cursor:   Arc<AtomicUsize>,
+   state:    Option<Arc<LimitState>>,
 }
+
+/// Writes the rate-limit map to disk so a restart does not forget which
+/// sessions X has already cut off.
+struct LimitState {
+   path:    String,
+   dirty:   Notify,
+   writing: Mutex<()>,
+}
+
+const STATE_FLUSH_INTERVAL: Duration = Duration::from_secs(15);
 
 struct SessionSlot {
    credentials:     Arc<SessionCredentials>,
@@ -156,11 +175,94 @@ impl SessionPool {
          limits.insert(id, lims);
       }
 
-      Ok(Self {
+      // Defaults on, like the sessions path, so a deployment that is not the
+      // Nix service does not silently forget its limits across a restart.
+      // Empty opts out.
+      let state_path =
+         env::var("TEAPOT_SESSION_STATE_FILE").unwrap_or_else(|_| "session-limits.json".to_owned());
+      let state = if state_path.is_empty() {
+         None
+      } else {
+         Self::restore(&state_path, &mut limits).await;
+         Some(Arc::new(LimitState {
+            path:    state_path,
+            dirty:   Notify::new(),
+            writing: Mutex::new(()),
+         }))
+      };
+
+      let pool = Self {
          sessions,
          limits: Arc::new(RwLock::new(limits)),
          cursor: Arc::new(AtomicUsize::new(0)),
-      })
+         state,
+      };
+      pool.spawn_flusher();
+
+      Ok(pool)
+   }
+
+   async fn restore(path: &str, limits: &mut HashMap<i64, SessionLimits>) {
+      let Ok(content) = fs::read_to_string(path).await else {
+         return;
+      };
+      match serde_json::from_str::<BTreeMap<i64, SessionLimits>>(&content) {
+         Ok(saved) => {
+            let mut restored = 0_usize;
+            for (id, saved_limits) in saved {
+               if let Some(slot) = limits.get_mut(&id) {
+                  *slot = saved_limits;
+                  restored += 1;
+               }
+            }
+            tracing::info!("Restored rate-limit state for {restored} sessions");
+         },
+         Err(err) => tracing::warn!("Ignoring unreadable session state: {err}"),
+      }
+   }
+
+   fn spawn_flusher(&self) {
+      let Some(state) = self.state.clone() else {
+         return;
+      };
+      let limits = Arc::clone(&self.limits);
+      tokio::spawn(async move {
+         loop {
+            state.dirty.notified().await;
+            // Coalesce, since update_session_limit fires on every response.
+            sleep(STATE_FLUSH_INTERVAL).await;
+
+            if let Err(err) = Self::store(&state, &limits).await {
+               tracing::warn!("Failed to store session state: {err}");
+               state.dirty.notify_one();
+            }
+         }
+      });
+   }
+
+   async fn store(state: &LimitState, limits: &RwLock<HashMap<i64, SessionLimits>>) -> Result<()> {
+      let _writing = state.writing.lock().await;
+      let snapshot = serde_json::to_string(&*limits.read().await)?;
+      let temporary = format!("{}.tmp", state.path);
+      fs::write(&temporary, snapshot).await?;
+      fs::rename(&temporary, &state.path).await?;
+      Ok(())
+   }
+
+   fn mark_dirty(&self) {
+      if let Some(state) = self.state.as_ref() {
+         state.dirty.notify_one();
+      }
+   }
+
+   /// Write the state before returning, for the transitions worth a restart.
+   async fn persist_now(&self) {
+      if let Some(state) = self.state.as_ref()
+         && let Err(err) = Self::store(state, &self.limits).await
+      {
+         tracing::warn!("Failed to store session state: {err}");
+         self.mark_dirty();
+      }
    }
 
    /// Acquire an available session for an API request.
@@ -307,6 +409,13 @@ impl SessionPool {
          }
          lim.update_limit(api, limit, remaining, reset);
       }
+      drop(limits);
+
+      if remaining <= 0 && reset > time::OffsetDateTime::now_utc().unix_timestamp() {
+         self.persist_now().await;
+      } else {
+         self.mark_dirty();
+      }
    }
 
    /// Mark one API as rate limited for a session, leaving its other endpoints
@@ -318,6 +427,8 @@ impl SessionPool {
       if let Some(lim) = limits.get_mut(&session_id) {
          lim.limit_endpoint(api);
       }
+      drop(limits);
+      self.persist_now().await;
    }
 
    /// Mark a session's credentials as refused, taking it out of rotation until
@@ -338,6 +449,8 @@ impl SessionPool {
          lim.limited = true;
          lim.limited_at = time::OffsetDateTime::now_utc().unix_timestamp();
       }
+      drop(limits);
+      self.persist_now().await;
    }
 
    /// Get session count.
