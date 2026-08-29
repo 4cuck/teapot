@@ -1,3 +1,9 @@
+use std::{
+   collections::BTreeMap,
+   iter,
+   slice,
+};
+
 use axum::{
    http::{
       StatusCode,
@@ -22,6 +28,7 @@ use crate::{
       Result,
    },
    types::{
+      AccountContext,
       Conversation,
       Timeline,
       Translation,
@@ -47,6 +54,146 @@ pub async fn get_cached_user(state: &AppState, username: &str) -> Result<User> {
    let fetched = state.api.get_user(username).await?;
    state.cache.set(&cache_key, &fetched, ttl::DEFAULT);
    Ok(fetched)
+}
+
+/// Decorate one user in place, spending an `AboutAccountQuery` only when both
+/// caches miss.
+pub async fn apply_account_context(state: &AppState, user: &mut User) {
+   let username = user.username.to_lowercase();
+   if username.is_empty() {
+      return;
+   }
+   let key = cache_keys::account_context(&username);
+
+   let context = if let Some(cached) = state.cache.get::<AccountContext>(&key) {
+      cached
+   } else {
+      let community = community_contexts(state, slice::from_ref(&username)).await;
+      let resolved = match community.into_values().next() {
+         Some(context) => context,
+         None => {
+            state
+               .api
+               .get_account_context(&username)
+               .await
+               .unwrap_or_else(|err| {
+                  tracing::debug!(username, "About Account unavailable: {err}");
+                  AccountContext::default()
+               })
+         },
+      };
+      state.cache.set(&key, &resolved, ttl::ACCOUNT_CONTEXT);
+      resolved
+   };
+
+   user.account_based_in = context.account_based_in;
+   user.connection_source = context.connection_source;
+   user.location_accurate = context.location_accurate;
+}
+
+/// Resolve about-account data for many users at once without spending X
+/// quota.
+pub async fn account_contexts(
+   state: &AppState,
+   usernames: &[String],
+) -> BTreeMap<String, AccountContext> {
+   let mut resolved = BTreeMap::new();
+   let mut missing = Vec::new();
+   for username in usernames {
+      let username = username.to_lowercase();
+      match state
+         .cache
+         .get::<AccountContext>(&cache_keys::account_context(&username))
+      {
+         Some(context) => {
+            resolved.insert(username, context);
+         },
+         None => missing.push(username),
+      }
+   }
+
+   for (username, context) in community_contexts(state, &missing).await {
+      state.cache.set(
+         &cache_keys::account_context(&username),
+         &context,
+         ttl::ACCOUNT_CONTEXT,
+      );
+      resolved.insert(username, context);
+   }
+
+   resolved.retain(|_, context| !context.is_empty());
+   resolved
+}
+
+/// Decorate every participant in a conversation.
+pub async fn enrich_conversation(state: &AppState, conversation: &mut Conversation) {
+   let usernames = participants(conversation)
+      .map(|user| user.username.to_lowercase())
+      .filter(|username| !username.is_empty())
+      .collect::<Vec<String>>();
+   if usernames.is_empty() {
+      return;
+   }
+
+   let contexts = account_contexts(state, &usernames).await;
+   if contexts.is_empty() {
+      return;
+   }
+
+   for user in participants_mut(conversation) {
+      if let Some(context) = contexts.get(&user.username.to_lowercase()) {
+         user.account_based_in.clone_from(&context.account_based_in);
+         user
+            .connection_source
+            .clone_from(&context.connection_source);
+         user.location_accurate = context.location_accurate;
+      }
+   }
+}
+
+fn participants(conversation: &Conversation) -> impl Iterator<Item = &User> {
+   iter::once(&conversation.tweet)
+      .chain(&conversation.before.content)
+      .chain(&conversation.after.content)
+      .chain(
+         conversation
+            .replies
+            .content
+            .iter()
+            .flat_map(|chain| chain.content.iter()),
+      )
+      .map(|tweet| &tweet.user)
+}
+
+fn participants_mut(conversation: &mut Conversation) -> impl Iterator<Item = &mut User> {
+   iter::once(&mut conversation.tweet)
+      .chain(&mut conversation.before.content)
+      .chain(&mut conversation.after.content)
+      .chain(
+         conversation
+            .replies
+            .content
+            .iter_mut()
+            .flat_map(|chain| chain.content.iter_mut()),
+      )
+      .map(|tweet| &mut tweet.user)
+}
+
+async fn community_contexts(
+   state: &AppState,
+   usernames: &[String],
+) -> BTreeMap<String, AccountContext> {
+   if !state.config.config.x_posed_community_cache || usernames.is_empty() {
+      return BTreeMap::new();
+   }
+   state
+      .api
+      .get_community_account_contexts(usernames)
+      .await
+      .unwrap_or_else(|err| {
+         tracing::debug!("X-Posed community cache unavailable: {err}");
+         BTreeMap::new()
+      })
 }
 
 /// Fetch one tweet, reusing either the conversation or tweet cache.
