@@ -544,7 +544,7 @@ impl ApiClient {
    pub async fn translate_tweet(&self, tweet_id: &str) -> Result<Translation> {
       let url = endpoints::translate_url(tweet_id);
       let session = self
-         .charged_session(endpoints::GRAPH_TWEET_DETAIL, Some(SessionKind::Cookie))
+         .charged_session(endpoints::STRATO_TRANSLATE, Some(SessionKind::Cookie))
          .await?;
 
       let api_path = format!(
@@ -598,14 +598,9 @@ impl ApiClient {
       }
 
       let response = self.client.get_with_headers(&url, &headers).await?;
-
-      if !response.status().is_success() {
-         let status = response.status();
-         let body = response.text().await.unwrap_or_default();
-         return Err(Error::Internal(format!(
-            "Translation API error {status}: {body}"
-         )));
-      }
+      let (bytes, _) = self
+         .account_response(&session, endpoints::STRATO_TRANSLATE, response)
+         .await?;
 
       #[expect(
          clippy::items_after_statements,
@@ -622,7 +617,6 @@ impl ApiClient {
          localized_source_language: Option<String>,
       }
 
-      let bytes = response.bytes().await?;
       drop(session);
       let resp: TranslationResponse = serde_json::from_slice(&bytes)
          .map_err(|err| Error::Internal(format!("Translation parse error: {err}")))?;

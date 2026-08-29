@@ -536,8 +536,40 @@ impl ApiClient {
          .await?;
 
       let response = self.client.get_with_headers(&url, &headers).await?;
+      let (bytes, limit_recorded) = self.account_response(session, endpoint, response).await?;
 
-      // Check rate limit headers
+      // Check for API errors before full deserialization.
+      // Mark the session as limited on token errors so the retry picks
+      // a different one.
+      let api_check = Self::check_api_errors(&bytes);
+      if let Err(Error::TwitterApi(ref msg)) = api_check
+         && msg.starts_with("Invalid token")
+      {
+         self.sessions.mark_rejected(session.id).await;
+         return Err(Error::SessionRejected(msg.clone()));
+      }
+      if !limit_recorded && matches!(api_check, Err(Error::RateLimited)) {
+         self
+            .sessions
+            .mark_endpoint_limited(session.id, endpoint)
+            .await;
+      }
+      api_check?;
+
+      let resp = serde_json::from_slice::<GqlResponse<T>>(&bytes)
+         .map_err(|err| Error::Internal(format!("Response parse error: {err}")))?;
+      Ok(resp.data)
+   }
+
+   /// Every authenticated call to X goes through here, or its 429s and refused
+   /// credentials never reach the pool. The flag reports whether the headers
+   /// recorded a real window, so a code 88 does not overwrite one.
+   async fn account_response(
+      &self,
+      session: &SessionLease,
+      endpoint: &str,
+      response: super::http::Response,
+   ) -> Result<(bytes::Bytes, bool)> {
       let limit_recorded = if let Some(remaining) = response.headers().get("x-rate-limit-remaining")
          && let Ok(remaining_str) = remaining.to_str()
          && let Ok(remaining_val) = remaining_str.parse::<i32>()
@@ -593,29 +625,7 @@ impl ApiClient {
          return Err(Error::TwitterApi(format!("Status {status}: {body}")));
       }
 
-      let bytes = response.bytes().await?;
-
-      // Check for API errors before full deserialization.
-      // Mark the session as limited on token errors so the retry picks
-      // a different one.
-      let api_check = Self::check_api_errors(&bytes);
-      if let Err(Error::TwitterApi(ref msg)) = api_check
-         && msg.starts_with("Invalid token")
-      {
-         self.sessions.mark_rejected(session.id).await;
-         return Err(Error::SessionRejected(msg.clone()));
-      }
-      if !limit_recorded && matches!(api_check, Err(Error::RateLimited)) {
-         self
-            .sessions
-            .mark_endpoint_limited(session.id, endpoint)
-            .await;
-      }
-      api_check?;
-
-      let resp = serde_json::from_slice::<GqlResponse<T>>(&bytes)
-         .map_err(|err| Error::Internal(format!("Response parse error: {err}")))?;
-      Ok(resp.data)
+      Ok((response.bytes().await?, limit_recorded))
    }
 
    async fn graphql_headers(
@@ -776,15 +786,9 @@ impl ApiClient {
       }
 
       let response = self.client.get_with_headers(url, &headers).await?;
-      if !response.status().is_success() {
-         let status = response.status();
-         let body = response.text().await.unwrap_or_default();
-         return Err(Error::TwitterApi(format!(
-            "X API request failed ({status}): {body}"
-         )));
-      }
-
-      let bytes = response.bytes().await?;
+      let (bytes, _) = self
+         .account_response(&session, session_key, response)
+         .await?;
       drop(session);
       serde_json::from_slice(&bytes)
          .map_err(|err| Error::Internal(format!("Response parse error: {err}")))
