@@ -1,7 +1,7 @@
 @import "variables.css";
 
 /* Self-contained on purpose. The interstitial is served by the proxy with its
-   own markup, so pulling in style.css drags teapot's layout onto a DOM that
+   own markup, so pulling in style.css drags teapawt's layout onto a DOM that
    has none of the elements it targets. */
 
 * {

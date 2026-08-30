@@ -37,8 +37,8 @@ async fn unsupported_login(State(state): State<AppState>) -> Response {
    let content = html! {
        div class="overlay-panel" {
            h1 { "Login Not Supported" }
-           p { "teapot does not support logging in to Twitter." }
-           p { "teapot is a privacy-focused frontend that allows you to browse Twitter without an account." }
+           p { "teapawt does not support logging in to Twitter." }
+           p { "teapawt is a privacy-focused frontend that allows you to browse Twitter without an account." }
            p {
                a href="/" { "Go to Homepage" }
            }
@@ -59,14 +59,14 @@ pub fn render_unsupported_feature(state: &AppState, feature_name: &str) -> Respo
        div class="overlay-panel" {
            h1 { "Unsupported feature" }
            p {
-               "teapot doesn't support this feature yet, but it might in the future. "
+               "teapawt doesn't support this feature yet, but it might in the future. "
                "You can check for an issue and open one if needed here: "
-               a href="https://github.com/amaanq/teapot/issues" target="_blank" {
-                   "https://github.com/amaanq/teapot/issues"
+               a href="https://github.com/4cuck/teapot/issues" target="_blank" {
+                   "https://github.com/4cuck/teapot/issues"
                }
            }
            p {
-               "To find out more about the teapot project, see the "
+               "To find out more about the teapawt project, see the "
                a href="/about" { "About page" }
            }
        }

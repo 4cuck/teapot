@@ -176,7 +176,7 @@ fn default_hostname() -> String {
    "localhost".to_owned()
 }
 fn default_title() -> String {
-   "teapot".to_owned()
+   "teapawt".to_owned()
 }
 fn default_address() -> String {
    "0.0.0.0".to_owned()

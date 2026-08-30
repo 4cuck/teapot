@@ -14,7 +14,7 @@ use crate::{
 };
 
 pub const STYLE_CSS: &str = "/css/style.css";
-pub const CLEAN_CSS: &str = "/css/clean.css?navicons";
+pub const CLEAN_CSS: &str = "/css/clean.css?teapawt";
 pub const FONTELLO_CSS: &str = "/css/fontello.css";
 
 /// Builder for rendering a full page layout.
@@ -142,7 +142,7 @@ impl<'a> PageLayout<'a> {
       let mask_icon_color = if self.custom_og {
          self.theme_color
       } else {
-         "#ff6c60"
+         "#0d535c"
       };
 
       html! {
@@ -298,7 +298,7 @@ pub fn render_navbar_full(config: &Config, rss: &str, canonical: &str, referer: 
            div class="inner-nav" {
                div class="nav-item" {
                    a class="site-brand" href="/" {
-                       img class="site-logo" src="/logo.svg" alt="";
+                       img class="site-logo" src="/logo.png?teapawt" alt="teapawt";
                        span class="site-name" { (config.server.title) }
                    }
                }

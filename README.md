@@ -1,6 +1,10 @@
-# teapot
+# teapawt
 
-A privacy-focused Twitter/X frontend written in Rust.
+A privacy-focused Twitter/X frontend written in Rust. This is a
+[teapot](https://github.com/amaanq/teapot) fork with its own identity —
+same engine, different name and logo.
+
+Public instance: [nitter.cf](https://nitter.cf) (also [xitter.cf](https://xitter.cf)).
 
 ## Features
 
@@ -31,7 +35,8 @@ cargo build --release
 cp config/teapot.example.toml config/teapot.toml
 ```
 
-1. Edit `config/teapot.toml` with your settings.
+1. Edit `config/teapot.toml` with your settings. Set `title = "teapawt"` (or
+   whatever you want shown in the navbar).
 
 2. Create a sessions file with your Twitter/X credentials:
 
@@ -54,7 +59,9 @@ cargo run
 ./target/release/teapot
 ```
 
-The server will start on `http://localhost:8080` by default.
+The crate and binary stay named `teapot` so existing configs and process
+managers keep working. The server will start on `http://localhost:8080` by
+default.
 
 ## Getting Twitter Sessions
 
@@ -68,7 +75,7 @@ To use the Twitter API, you need session tokens from a logged-in Twitter account
 ## Project Structure
 
 ```
-teapot/
+teapawt/
 ├── src/
 │   ├── main.rs          # Entry point
 │   ├── config.rs        # Configuration
@@ -79,7 +86,7 @@ teapot/
 │   ├── routes/          # HTTP route handlers
 │   ├── views/           # Maud HTML templates
 │   └── utils/           # Utilities (HMAC, formatters)
-├── public/              # Static assets (CSS, JS, fonts)
+├── public/              # Static assets (CSS, JS, fonts, logo)
 ├── config/              # Configuration files
 └── Cargo.toml           # Dependencies
 ```

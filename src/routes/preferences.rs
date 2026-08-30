@@ -250,7 +250,7 @@ async fn settings(
    let prefs_url = format!("{}/?prefs={encoded_prefs}", state.config.url_prefix());
    let content = pref_view::render_preferences_form(&prefs, &themes, &referer, &prefs_url);
    let markup = layout::PageLayout::new(&state.config, "Settings", content)
-      .description("Customize your teapot experience")
+      .description("Customize your teapawt experience")
       .prefs(&prefs)
       .render();
 

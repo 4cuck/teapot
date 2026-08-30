@@ -126,13 +126,13 @@
         in
         {
           options.services.teapot = {
-            enable = lib.mkEnableOption "teapot, a privacy-focused Twitter/X frontend";
+            enable = lib.mkEnableOption "teapawt, a privacy-focused Twitter/X frontend";
 
             package = lib.mkOption {
               type = lib.types.package;
               default = pkgs.callPackage ./nix/package.nix { };
               defaultText = lib.literalExpression "pkgs.callPackage ./nix/package.nix { }";
-              description = "The teapot package to use.";
+              description = "The teapawt package to use.";
             };
 
             server = {
@@ -144,7 +144,7 @@
               };
               title = lib.mkOption {
                 type = lib.types.str;
-                default = "teapot";
+                default = "teapawt";
                 description = "Title of the instance.";
               };
               address = lib.mkOption {
@@ -262,7 +262,7 @@
                   Read about-account data from X-Posed's public cache before
                   asking X, saving a call on the scarcest rate-limit tier.
                   Off by default because it discloses the usernames being
-                  viewed to a third party. teapot never contributes to it.
+                  viewed to a third party. teapawt never contributes to it.
                 '';
               };
               maxConcurrentReqs = lib.mkOption {
@@ -374,7 +374,7 @@
 
           config = lib.mkIf cfg.enable {
             systemd.services.teapot = {
-              description = "teapot (privacy-focused Twitter/X frontend)";
+              description = "teapawt (privacy-focused Twitter/X frontend)";
               wantedBy = [ "multi-user.target" ];
               wants = [ "network-online.target" ];
               after = [ "network-online.target" ];

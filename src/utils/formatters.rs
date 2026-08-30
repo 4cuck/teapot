@@ -43,7 +43,7 @@ static USER_PIC_SIZE_RE: LazyLock<Regex> =
    LazyLock::new(|| Regex::new(r"_(normal|bigger|mini|200x200|400x400)(\.[A-Za-z]+)$").unwrap());
 static USER_PIC_EXT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\.[A-Za-z]+)$").unwrap());
 
-/// Replace Twitter/X URLs with teapot instance URLs.
+/// Replace Twitter/X URLs with teapawt instance URLs.
 /// Handles both raw URLs (in href attributes) and HTML anchor tags (display
 /// text). Avoids matching partial domains like `spacex.com` by requiring `://`
 /// or word boundary before the domain.

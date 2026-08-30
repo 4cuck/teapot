@@ -1,4 +1,4 @@
-//! Static pages served by teapot itself.
+//! Static pages served by teapawt itself.
 
 use axum::{
    Router,
@@ -26,10 +26,10 @@ use crate::{
 };
 
 const HOME_DESCRIPTION: &str = "nitter.cf is a public Nitter replacement — a privacy-focused Twitter/X frontend. nitter.net shut down; this instance is a drop-in successor.";
-const ABOUT_DESCRIPTION: &str = "About nitter.cf, a public Nitter replacement. After nitter.net shut down, this teapot instance lets you browse Twitter/X without JavaScript or tracking.";
-const HOME_JSON_LD: &str = r#"{"@context":"https://schema.org","@type":"WebSite","name":"nitter.cf","alternateName":["Nitter","teapot","xitter.cf"],"url":"https://nitter.cf/","description":"Public Nitter replacement. nitter.net shut down; nitter.cf is a privacy-focused Twitter/X frontend.","sameAs":["https://xitter.cf"]}"#;
+const ABOUT_DESCRIPTION: &str = "About nitter.cf, a public Nitter replacement. After nitter.net shut down, this teapawt instance lets you browse Twitter/X without JavaScript or tracking.";
+const HOME_JSON_LD: &str = r#"{"@context":"https://schema.org","@type":"WebSite","name":"nitter.cf","alternateName":["Nitter","teapawt","xitter.cf"],"url":"https://nitter.cf/","description":"Public Nitter replacement. nitter.net shut down; nitter.cf is a privacy-focused Twitter/X frontend.","sameAs":["https://xitter.cf"]}"#;
 
-/// The pages teapot serves itself rather than fetching from X.
+/// The pages teapawt serves itself rather than fetching from X.
 pub fn router() -> Router<AppState> {
    Router::new()
       .route("/", get(home))
@@ -87,8 +87,10 @@ async fn about(State(state): State<AppState>, jar: CookieJar) -> impl IntoRespon
 
            p {
                "This site runs "
-               a href="https://github.com/4cuck/teapot" { "teapot" }
-               ", a free and open source alternative Twitter front-end focused on privacy and performance."
+               a href="https://github.com/4cuck/teapot" { "teapawt" }
+               ", a privacy-focused Twitter/X frontend forked from "
+               a href="https://github.com/amaanq/teapot" { "teapot" }
+               "."
            }
 
            ul {
@@ -104,14 +106,14 @@ async fn about(State(state): State<AppState>, jar: CookieJar) -> impl IntoRespon
            }
 
            p {
-               "teapot's GitHub wiki contains "
+               "Upstream teapot's GitHub wiki contains "
                a href="https://github.com/amaanq/teapot/wiki/Instances" { "instances" }
                " and "
                a href="https://github.com/amaanq/teapot/wiki/Extensions" { "browser extensions" }
                " maintained by the community."
            }
 
-           h2 { "Why use teapot?" }
+           h2 { "Why use teapawt?" }
 
            p {
                "It's impossible to use Twitter without JavaScript enabled, and as of 2024 you need to sign up. "
@@ -127,15 +129,15 @@ async fn about(State(state): State<AppState>, jar: CookieJar) -> impl IntoRespon
            }
 
            p {
-               "Using an instance of teapot (hosted on a VPS for example), you can browse Twitter without "
-               "JavaScript while retaining your privacy. In addition to respecting your privacy, teapot is on "
+               "Using an instance of teapawt (hosted on a VPS for example), you can browse Twitter without "
+               "JavaScript while retaining your privacy. In addition to respecting your privacy, teapawt is on "
                "average around 15 times lighter than Twitter, and in most cases serves pages faster "
                "(eg. timelines load 2-4x faster)."
            }
 
            h2 { "Instance info" }
            p {
-               "Version: teapot " (env!("CARGO_PKG_VERSION"))
+               "Version: teapawt " (env!("CARGO_PKG_VERSION"))
            }
        }
    };

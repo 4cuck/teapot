@@ -51,9 +51,10 @@ nav {
 
 .site-logo {
   display: block;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--shape-md);
+  width: 40px;
+  height: 28px;
+  object-fit: contain;
+  border-radius: 0;
 }
 
 .nav-item {

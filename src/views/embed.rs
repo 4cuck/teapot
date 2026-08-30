@@ -496,7 +496,7 @@ pub fn render_tweet_embed(tweet: &Tweet, config: &Config, discord_activity: bool
                    href=(oembed_url)
                    type="application/json+oembed";
 
-               title { "@" (tweet.user.username) " on teapot" }
+               title { "@" (tweet.user.username) " on teapawt" }
                link rel="stylesheet" type="text/css" href=(super::layout::STYLE_CSS);
                link rel="stylesheet" type="text/css" href=(super::layout::FONTELLO_CSS);
            }

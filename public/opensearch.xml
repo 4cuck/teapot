@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <OpenSearchDescription xmlns="http://a9.com/-/spec/opensearch/1.1/">
-  <ShortName>teapot</ShortName>
-  <Description>Search Twitter via teapot</Description>
+  <ShortName>teapawt</ShortName>
+  <Description>Search Twitter via teapawt</Description>
   <InputEncoding>UTF-8</InputEncoding>
   <Image width="16" height="16" type="image/x-icon">/public/favicon.ico</Image>
   <Url type="text/html" template="/search?q={searchTerms}"/>

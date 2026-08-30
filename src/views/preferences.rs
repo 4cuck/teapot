@@ -89,7 +89,7 @@ pub fn render_preferences_form(
                // Header with animation
                div class="preferences-header" {
                    h2 { "Preferences" }
-                   p { "Customize your teapot experience" }
+                   p { "Customize your teapawt experience" }
                }
 
                form method="post" action="/saveprefs" autocomplete="off" class="preferences-form" id="saveprefs-form" {
@@ -128,7 +128,7 @@ pub fn render_preferences_form(
                    // Link replacements section
                    div class="pref-section" data-section="links" {
                        legend { "Link replacements (blank to disable)" }
-                       (gen_input("replaceTwitter", "Twitter -> teapot", &prefs.replace_twitter, "teapot hostname"))
+                       (gen_input("replaceTwitter", "Twitter -> teapawt", &prefs.replace_twitter, "teapawt hostname"))
                        (gen_input("replaceYouTube", "YouTube -> Piped/Invidious", &prefs.replace_youtube, "Piped hostname"))
                        (gen_input("replaceReddit", "Reddit -> Teddit/Libreddit", &prefs.replace_reddit, "Teddit hostname"))
                    }

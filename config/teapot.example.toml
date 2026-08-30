@@ -1,4 +1,4 @@
-# teapot Configuration
+# teapawt Configuration
 
 [server]
 # Domain for generating links - change this to your own domain/ip
@@ -8,7 +8,7 @@ httpMaxConnections = 100
 https              = false       # Set to true when using HTTPS
 port               = 8080
 staticDir          = "./public"
-title              = "teapot"
+title              = "teapawt"
 
 [cache]
 # Cache TTL settings (in-process cache, no external dependencies)
@@ -62,7 +62,7 @@ disableTid = false
 
 # Read about-account data from X-Posed's public cache before asking X, saving a
 # call on the scarcest rate-limit tier. Discloses the usernames being viewed to
-# a third party. teapot never contributes to it.
+# a third party. teapawt never contributes to it.
 xPosedCommunityCache = false
 
 # Max requests per session to avoid race conditions

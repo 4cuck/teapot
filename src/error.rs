@@ -220,7 +220,7 @@ impl IntoResponse for Error {
 <title>Error</title>
 </head>
 <body>
-<nav><div class="inner-nav"><a class="site-name" href="/">teapot</a></div></nav>
+<nav><div class="inner-nav"><a class="site-name" href="/">teapawt</a></div></nav>
 <div class="container"><div class="panel-container"><div class="error-panel"><span>{}</span></div></div></div>
 </body>
 </html>"#,

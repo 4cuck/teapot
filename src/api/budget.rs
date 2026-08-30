@@ -1,6 +1,6 @@
 //! Per-client budget for authenticated upstream calls.
 //!
-//! Charged where teapot spends X API quota, so cache hits, media proxying and
+//! Charged where teapawt spends X API quota, so cache hits, media proxying and
 //! static assets are free without being listed anywhere. Every tier must admit
 //! the call, so a crawler settles onto the slowest refill while a reader stays
 //! in the fastest.

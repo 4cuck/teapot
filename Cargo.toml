@@ -4,10 +4,10 @@ version      = "0.1.0"
 edition      = "2024"
 rust-version = "1.96.1"
 authors      = [ "Amaan Qureshi <contact@amaanq.com>" ]
-description  = "A privacy-focused Twitter/X frontend written in Rust"
+description  = "teapawt — a privacy-focused Twitter/X frontend (teapot fork)"
 license      = "AGPL-3.0-only"
-repository   = "https://github.com/amaanq/teapot"
-keywords     = [ "twitter", "privacy", "frontend", "teapot" ]
+repository   = "https://github.com/4cuck/teapot"
+keywords     = [ "twitter", "privacy", "frontend", "teapawt" ]
 categories   = [ "web-programming::http-server" ]
 
 [dependencies]

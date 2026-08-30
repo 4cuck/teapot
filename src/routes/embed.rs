@@ -270,7 +270,7 @@ struct StandardOEmbed {
    cache_age:     u32,
 }
 
-/// Standard oEmbed endpoint: `/oembed?url=https://teapot.example.com/user/status/123`.
+/// Standard oEmbed endpoint: `/oembed?url=https://teapawt.example.com/user/status/123`.
 ///
 /// Parses the tweet ID from the URL, fetches the tweet, and returns a full
 /// oEmbed response per <https://oembed.com>.

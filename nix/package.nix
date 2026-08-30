@@ -56,8 +56,8 @@ rustPlatform.buildRustPackage {
   '';
 
   meta = {
-    description = "A privacy-focused Twitter/X frontend written in Rust";
-    homepage = "https://github.com/amaanq/teapot";
+    description = "teapawt — a privacy-focused Twitter/X frontend (teapot fork)";
+    homepage = "https://github.com/4cuck/teapot";
     license = lib.licenses.agpl3Only;
     mainProgram = "teapot";
   };
