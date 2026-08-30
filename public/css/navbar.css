@@ -124,3 +124,12 @@ nav {
   background-color: var(--bg_hover);
   text-decoration: none;
 }
+
+.nav-icon.sister-site img {
+  display: block;
+  width: 22px;
+  height: 22px;
+  object-fit: cover;
+  border-radius: 4px;
+  image-rendering: pixelated;
+}

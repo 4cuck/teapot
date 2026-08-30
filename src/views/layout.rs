@@ -196,6 +196,10 @@ impl<'a> PageLayout<'a> {
                       title { (self.title) " | " (self.config.server.title) }
                   }
 
+                  @if !self.description.is_empty() {
+                      meta name="description" content=(strip_html(self.description));
+                  }
+
                   // OpenGraph meta tags
                   @if !self.custom_og {
                       meta property="og:site_name" content=(self.config.server.title);
@@ -251,6 +255,22 @@ impl<'a> PageLayout<'a> {
    }
 }
 
+const SOYJAK_ICONS: &[&str] = &[
+   "/public/icons/soyjak-babyjak.png",
+   "/public/icons/soyjak-cobson.png",
+   "/public/icons/soyjak-feraljak.png",
+   "/public/icons/soyjak-flartson.png",
+   "/public/icons/soyjak-gapejak.png",
+   "/public/icons/soyjak-soyjak.png",
+];
+
+fn random_soyjak_icon() -> &'static str {
+   let idx = std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .map_or(0, |elapsed| elapsed.subsec_nanos() as usize % SOYJAK_ICONS.len());
+   SOYJAK_ICONS[idx]
+}
+
 /// Render navbar with all context.
 pub fn render_navbar_full(config: &Config, rss: &str, canonical: &str, referer: &str) -> Markup {
    let canonical = if canonical.is_empty() {
@@ -278,6 +298,15 @@ pub fn render_navbar_full(config: &Config, rss: &str, canonical: &str, referer: 
                    img class="site-logo" src="/logo.svg" alt=(format!("{} logo", config.server.title));
                }
                div class="nav-item right" {
+                   a class="nav-icon sister-site" title="owo.vg — 4chan frontend" href="https://owo.vg" target="_blank" rel="noopener noreferrer" {
+                       img src="/public/icons/4chan.png" alt="4chan" width="22" height="22";
+                   }
+                   a class="nav-icon sister-site" title="soyjak.cf — soyjak.st frontend" href="https://soyjak.cf" target="_blank" rel="noopener noreferrer" {
+                       img src=(random_soyjak_icon()) alt="soyjak" width="22" height="22";
+                   }
+                   a class="nav-icon sister-site" title="awoo.cf — imageboard" href="https://awoo.cf" target="_blank" rel="noopener noreferrer" {
+                       img src="/public/icons/awoo.png" alt="awoo" width="22" height="22";
+                   }
                    a class="nav-icon" title="Search" href="/search" {
                        span class="icon-search" aria-hidden="true" {}
                    }

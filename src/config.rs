@@ -200,7 +200,7 @@ const fn default_max_concurrent_reqs() -> u32 {
    2
 }
 fn default_theme() -> String {
-   "teapot".to_owned()
+   "black".to_owned()
 }
 fn default_paid_emoji() -> String {
    "🤝".to_owned()

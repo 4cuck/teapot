@@ -26,6 +26,9 @@
 # Session example
 !sessions.example.jsonl
 
+# Live instance files stay ignored even if allowlists are widened later
+# sessions.jsonl, config/teapot.toml, session-limits.json, ecosystem.config.cjs, *.log
+
 # Source
 !src/
 !src/**

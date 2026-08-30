@@ -82,7 +82,7 @@ externalDomain = ""
 
 [preferences]
 # Default theme
-theme = "teapot"
+theme = "black"
 
 # URL replacements for privacy
 replaceReddit  = ""

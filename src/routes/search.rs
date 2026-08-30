@@ -26,12 +26,34 @@ use crate::{
       Prefs,
       Query,
       QueryKind,
+      Tweet,
    },
    views::{
       layout,
       search as search_view,
    },
 };
+
+/// One card per original tweet. Latest search otherwise lists every retweet
+/// of a viral post as its own row.
+fn dedup_search_tweets(tweets: Vec<Tweet>) -> Vec<Tweet> {
+   let mut order = Vec::new();
+   let mut best = std::collections::HashMap::new();
+   for tweet in tweets {
+      let id = tweet.original_id();
+      match best.get(&id) {
+         None => {
+            order.push(id);
+            best.insert(id, tweet);
+         },
+         Some(existing) if existing.retweet.is_some() && tweet.retweet.is_none() => {
+            best.insert(id, tweet);
+         },
+         _ => {},
+      }
+   }
+   order.into_iter().filter_map(|id| best.remove(&id)).collect()
+}
 
 #[derive(Debug, Default, Deserialize)]
 pub struct SearchQuery {
@@ -323,7 +345,7 @@ async fn search(
 
       match search_result {
          Ok(timeline) => {
-            let tweets = timeline.content.into_iter().flatten().collect::<Vec<_>>();
+            let tweets = dedup_search_tweets(timeline.content.into_iter().flatten().collect());
             let cursor = timeline.bottom.as_deref();
 
             // Display the original user query, not the API query

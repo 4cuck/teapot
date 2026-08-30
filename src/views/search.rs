@@ -18,6 +18,24 @@ use crate::{
    },
 };
 
+/// Search pagination URL. The Twitter cursor is opaque and must be encoded —
+/// raw `+` / `=` in the query string get treated as form syntax and break paging.
+fn search_page_url(query: &str, tab: &str, cursor: Option<&str>) -> String {
+   let mut url = format!("/search?q={}", formatters::url_encode(query));
+   match tab {
+      "users" | "top" | "media" => {
+         url.push_str("&f=");
+         url.push_str(tab);
+      },
+      _ => {},
+   }
+   if let Some(cursor) = cursor {
+      url.push_str("&cursor=");
+      url.push_str(&formatters::url_encode(cursor));
+   }
+   url
+}
+
 /// Render the empty search page (home search bar).
 pub fn render_search_page() -> Markup {
    html! {
@@ -75,7 +93,7 @@ pub fn render_search_results_with_prefs(
 
                    @if let Some(cur) = cursor {
                        div class="show-more" {
-                           a href=(format!("/search?q={}&cursor={}", formatters::url_encode(query), cur)) {
+                           a href=(search_page_url(query, active_tab, Some(cur))) {
                                "Load more"
                            }
                        }
@@ -132,7 +150,7 @@ pub fn render_user_search_results(
 
                    @if let Some(cur) = cursor {
                        div class="show-more" {
-                           a href=(format!("/search?q={}&f=users&cursor={}", formatters::url_encode(query), cur)) {
+                           a href=(search_page_url(query, "users", Some(cur))) {
                                "Load more"
                            }
                        }

@@ -90,8 +90,10 @@ impl Query {
          param.push_str("(filter:self_threads OR -filter:replies) ");
       }
 
-      // Add include:nativeretweets unless explicitly excluded
-      if !self.excludes.contains(&"nativeretweets".to_owned()) {
+      // Only force-include retweets for from:user searches (a profile-style
+      // feed). Keyword search would otherwise repeat the same viral tweet
+      // once per retweeter.
+      if !self.from_user.is_empty() && !self.excludes.contains(&"nativeretweets".to_owned()) {
          param.push_str("include:nativeretweets ");
       }
 
@@ -325,5 +327,17 @@ mod tests {
    fn negative_words_survive_url_round_trip_text() {
       let query = Query::parse("rust -spam", QueryKind::Posts);
       assert!(query.to_url_params().contains("q=rust%20%2Dspam"));
+   }
+
+   #[test]
+   fn keyword_search_does_not_force_nativeretweets() {
+      let query = Query::parse("marefair", QueryKind::Posts);
+      assert!(!query.build().contains("include:nativeretweets"));
+   }
+
+   #[test]
+   fn from_user_search_still_includes_nativeretweets() {
+      let query = Query::parse("from:alice hello", QueryKind::Posts);
+      assert!(query.build().contains("include:nativeretweets"));
    }
 }

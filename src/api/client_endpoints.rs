@@ -42,6 +42,21 @@ use super::{
    timeout,
 };
 
+fn search_page_is_stuck(timeline: &Timeline) -> bool {
+   let mut ids = timeline.content.iter().flatten().map(Tweet::original_id);
+   let Some(first) = ids.next() else {
+      return false;
+   };
+   let mut count = 1_usize;
+   for id in ids {
+      if id != first {
+         return false;
+      }
+      count += 1;
+   }
+   count >= 3
+}
+
 #[expect(
    clippy::multiple_inherent_impl,
    reason = "endpoint methods are split from transport/authentication internals"
@@ -354,13 +369,11 @@ impl ApiClient {
          .await?;
       let mut timeline = parser::parse_search_timeline(&data);
 
-      // When no more items are available the API returns the last page again.
-      // Detect this by comparing the first 64 chars of the input and output cursors.
+      // X often repeats the last page with a new cursor that still shares a
+      // long prefix. Stop only when the cursor is unchanged or this page is
+      // the same tweet over and over.
       if let Some(after) = cursor
-         && let Some(ref bottom) = timeline.bottom
-         && let Some(after_prefix) = after.get(..64)
-         && let Some(bottom_prefix) = bottom.get(..64)
-         && after_prefix == bottom_prefix
+         && (timeline.bottom.as_deref() == Some(after) || search_page_is_stuck(&timeline))
       {
          timeline.content.clear();
          timeline.bottom = None;

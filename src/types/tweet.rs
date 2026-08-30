@@ -358,4 +358,12 @@ impl Tweet {
          || !self.additional_videos.is_empty()
          || self.gif.is_some()
    }
+
+   /// Status id of the original post. Retweet wrappers have their own id.
+   pub fn original_id(&self) -> i64 {
+      match self.retweet.as_ref() {
+         Some(inner) if inner.id != 0 => inner.id,
+         _ => self.id,
+      }
+   }
 }

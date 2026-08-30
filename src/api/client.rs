@@ -323,6 +323,17 @@ impl ApiClient {
          return Ok(());
       };
 
+      if error.code == 214 {
+         if error.message.contains("Unknown request cursor") {
+            return Err(Error::InvalidUrl(
+               "This page has expired. Go back and try again.".into(),
+            ));
+         }
+         if error.message.contains("denylist") {
+            return Err(Error::InvalidUrl(error.message.clone()));
+         }
+      }
+
       if let Some(twitter_err) = TwitterError::from_code(error.code) {
          return match twitter_err {
             TwitterError::UserNotFound | TwitterError::NoUserMatches => {
@@ -599,13 +610,13 @@ impl ApiClient {
       if !response.status().is_success() {
          let status = response.status();
          let body = response.text().await.unwrap_or_default();
-         tracing::error!(
-            session_id = session.id,
-            session_user = %session.username,
-            "API request failed: {status} - {body}"
-         );
 
          if status.as_u16() == 429 {
+            tracing::warn!(
+               session_id = session.id,
+               session_user = %session.username,
+               "API request failed: {status} - {body}"
+            );
             if !limit_recorded {
                self
                   .sessions
@@ -618,8 +629,38 @@ impl ApiClient {
          // Only 401 means the credentials themselves were refused. A 403 is an
          // authenticated request denied a particular resource.
          if status.as_u16() == 401 {
+            tracing::error!(
+               session_id = session.id,
+               session_user = %session.username,
+               "API request failed: {status} - {body}"
+            );
             self.sessions.mark_rejected(session.id).await;
             return Err(Error::SessionRejected(format!("Status {status}: {body}")));
+         }
+
+         // Deleted tweets, missing users, and dead media URLs come back as
+         // HTTP 404. Those are not instance faults.
+         if status.as_u16() == 404 {
+            tracing::debug!(
+               session_id = session.id,
+               session_user = %session.username,
+               "API 404: {body}"
+            );
+            return Err(Error::NotFound("Not found".into()));
+         }
+
+         if status.is_server_error() {
+            tracing::error!(
+               session_id = session.id,
+               session_user = %session.username,
+               "API request failed: {status} - {body}"
+            );
+         } else {
+            tracing::warn!(
+               session_id = session.id,
+               session_user = %session.username,
+               "API request failed: {status} - {body}"
+            );
          }
 
          return Err(Error::TwitterApi(format!("Status {status}: {body}")));
