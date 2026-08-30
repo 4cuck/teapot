@@ -186,6 +186,8 @@ async fn status(
          let is_scroll = query.scroll.as_ref().is_some_and(|val| val == "true");
          let has_cursor = query.cursor.is_some();
 
+         helpers::enrich_conversation(&state, &mut conversation).await;
+
          // Auto-translate for embeds (OG tags / ActivityPub show translated text)
          if !discord_activity && !is_scroll && !has_cursor && conversation.tweet.is_translatable {
             let kagi = &state.config.config.kagi_token;
@@ -352,6 +354,7 @@ fn render_conversation(
                div class="timeline-item show-more" {
                    a href=(format!("/{username}/status/{id}#r")) { "Back to tweet" }
                }
+               (tweet_view::render_thread_context(tweet, config))
                div class="replies" id="r" {
                    (render_reply_chains(
                        &conversation.replies.content,
@@ -424,6 +427,7 @@ fn render_conversation(
 
                // Replies section
                @if has_replies {
+                   (tweet_view::render_thread_context(tweet, config))
                    div class="replies" id="r" {
                        (render_reply_chains(
                            &conversation.replies.content,

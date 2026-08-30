@@ -183,7 +183,8 @@ async fn user_timeline(
    };
 
    match profile_result {
-      Ok(profile_data) => {
+      Ok(mut profile_data) => {
+         helpers::apply_account_context(&state, &mut profile_data.user).await;
          // For AJAX scroll requests, return only the tweets HTML
          if is_scroll {
             let (tweets, cursor) = extract_timeline(profile_data.tweets);

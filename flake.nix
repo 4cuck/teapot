@@ -255,6 +255,16 @@
                 default = false;
                 description = "Disable TID for cookie-based auth.";
               };
+              xPosedCommunityCache = lib.mkOption {
+                type = lib.types.bool;
+                default = false;
+                description = ''
+                  Read about-account data from X-Posed's public cache before
+                  asking X, saving a call on the scarcest rate-limit tier.
+                  Off by default because it discloses the usernames being
+                  viewed to a third party. teapot never contributes to it.
+                '';
+              };
               maxConcurrentReqs = lib.mkOption {
                 type = lib.types.int;
                 default = 2;

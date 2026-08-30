@@ -21,6 +21,7 @@ use super::{
 };
 use crate::{
    api::schema::{
+      AboutAccountData,
       AudioSpaceData,
       AudioSpaceMetadata,
       BroadcastMetadata,
@@ -45,6 +46,7 @@ use crate::{
       TwitterError,
    },
    types::{
+      AccountContext,
       Article,
       CardKind,
       Conversation,
@@ -64,6 +66,14 @@ use crate::{
 
 /// A search spends a `SearchTimeline` call and is never served from cache.
 const SEARCH_COST: f64 = 2.0;
+
+/// Community-cache strings are written by third parties, so cap them before
+/// they reach a page.
+fn clamp_community_value(value: Option<String>) -> String {
+   value
+      .map(|value| value.trim().chars().take(100).collect())
+      .unwrap_or_default()
+}
 
 fn space_id_from_url(url: &str) -> Option<&str> {
    url.split("/spaces/")

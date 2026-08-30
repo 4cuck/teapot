@@ -113,45 +113,48 @@ pub struct CacheConfig {
 )]
 pub struct AppConfig {
    #[serde(rename = "hmacKey")]
-   pub hmac_key:               String,
+   pub hmac_key:                String,
    #[serde(default, rename = "base64Media")]
-   pub base64_media:           bool,
+   pub base64_media:            bool,
    #[serde(default = "default_true", rename = "enableRSS")]
-   pub enable_rss:             bool,
+   pub enable_rss:              bool,
    #[serde(default = "default_client_budget", rename = "clientBudget")]
-   pub client_budget:          bool,
+   pub client_budget:           bool,
    #[serde(default, rename = "trustedProxies")]
-   pub trusted_proxies:        Vec<String>,
+   pub trusted_proxies:         Vec<String>,
    #[serde(default, rename = "rateLimitedMessage")]
-   pub rate_limited_message:   Vec<String>,
+   pub rate_limited_message:    Vec<String>,
    #[serde(default, rename = "clientBudgetMessage")]
-   pub client_budget_message:  Vec<String>,
+   pub client_budget_message:   Vec<String>,
    #[serde(default, rename = "internalErrorMessage")]
-   pub internal_error_message: Vec<String>,
+   pub internal_error_message:  Vec<String>,
    #[serde(default, rename = "enableDebug")]
-   pub enable_debug:           bool,
+   pub enable_debug:            bool,
    #[serde(default, rename = "debugToken")]
-   pub debug_token:            String,
+   pub debug_token:             String,
    #[serde(default)]
-   pub proxy:                  String,
+   pub proxy:                   String,
    #[serde(default, rename = "proxyAuth")]
-   pub proxy_auth:             String,
+   pub proxy_auth:              String,
    #[serde(default, rename = "apiProxy")]
-   pub api_proxy:              String,
+   pub api_proxy:               String,
    #[serde(default, rename = "disableTid")]
-   pub disable_tid:            bool,
+   pub disable_tid:             bool,
+   /// Read about-account data from X-Posed's public cache before asking X.
+   #[serde(default, rename = "xPosedCommunityCache")]
+   pub x_posed_community_cache: bool,
    #[serde(default = "default_max_concurrent_reqs", rename = "maxConcurrentReqs")]
-   pub max_concurrent_reqs:    u32,
+   pub max_concurrent_reqs:     u32,
    #[serde(default = "default_paid_emoji", rename = "paidEmoji")]
-   pub paid_emoji:             String,
+   pub paid_emoji:              String,
    #[serde(default = "default_ai_emoji", rename = "aiEmoji")]
-   pub ai_emoji:               String,
+   pub ai_emoji:                String,
    /// Kagi session token for server-side translation (inline value).
    #[serde(default, rename = "kagiToken")]
-   pub kagi_token:             String,
+   pub kagi_token:              String,
    /// Path to a file containing the Kagi session token.
    #[serde(default, rename = "kagiTokenFile")]
-   pub kagi_token_file:        String,
+   pub kagi_token_file:         String,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

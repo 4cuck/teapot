@@ -181,7 +181,6 @@ impl<'a> TweetRenderer<'a> {
          .map_or((tweet, None), |rt| (rt.as_ref(), Some(&tweet.user)));
 
       // Build CSS class based on context.
-      // Use "thread-last" only for the final tweet. Omit start and middle classes.
       // Includes .author-{user} and .retweet-{user} for adblock filtering.
       let author_class = format!("author-{}", display_tweet.user.username);
       let retweet_class = retweet_by.map(|rt_user| format!("retweet-{}", rt_user.username));
@@ -192,8 +191,11 @@ impl<'a> TweetRenderer<'a> {
       if !extra_class.is_empty() {
          classes.push(extra_class);
       }
-      if thread_ctx == ThreadContext::End {
-         classes.push("thread-last");
+      match thread_ctx {
+         ThreadContext::Start => classes.push("thread-first"),
+         ThreadContext::Middle => classes.push("thread-middle"),
+         ThreadContext::End => classes.push("thread-last"),
+         ThreadContext::None => {},
       }
       let class = classes.join(" ");
 
@@ -251,6 +253,7 @@ impl<'a> TweetRenderer<'a> {
                                   (link_user(&display_tweet.user, "fullname"))
                                   (verified_icon(&display_tweet.user))
                                   (link_user(&display_tweet.user, "username"))
+                                  (render_tweet_account_signal(&display_tweet.user))
                               }
 
                               span class="tweet-date" {
@@ -754,6 +757,66 @@ fn render_user_avatar(user: &User, config: &Config, prefs: Option<&Prefs>) -> Ma
    }
 }
 
+/// Sticky reminder of the post the visible replies belong to, revealed by
+/// `threadContext.js` once the opening thread scrolls past.
+pub fn render_thread_context(tweet: &Tweet, config: &Config) -> Markup {
+   let display_tweet = tweet.retweet.as_deref().unwrap_or(tweet);
+   if display_tweet.text.trim().is_empty() {
+      return Markup::default();
+   }
+
+   let text_html = render_tweet_text_html(&display_tweet.text, &display_tweet.entities, "", config);
+   let text = super::layout::strip_html(&text_html);
+   let avatar_url =
+      formatters::get_pic_url(&display_tweet.user.user_pic, config.config.base64_media);
+
+   html! {
+       aside class="thread-context-bar" aria-label="Original post context" {
+           a class="thread-context-link" href="#m" title="Back to the original post" {
+               span class="sr-only" { "Back to the original post: " }
+               img class="thread-context-avatar" src=(avatar_url) alt="" loading="lazy";
+               span class="thread-context-copy" {
+                   strong class="thread-context-author" { (&display_tweet.user.fullname) }
+                   span class="thread-context-text" dir="auto" { (text) }
+               }
+           }
+       }
+   }
+}
+
+/// Inline country marker beside a poster's name, expanding to the same detail
+/// the profile panel shows.
+fn render_tweet_account_signal(user: &User) -> Markup {
+   if user.account_based_in.is_empty() {
+      return Markup::default();
+   }
+
+   html! {
+       details class="tweet-account-trigger" {
+           summary class="tweet-account-location" title="Show X-reported account information" {
+               span class="account-signal-dot" {}
+               (user.account_based_in)
+               @if user.location_accurate == Some(false) {
+                   span class="tweet-account-warning"
+                        title="X says this location may be affected by a proxy or VPN" { "!" }
+               }
+           }
+           div class="tweet-account-popover" {
+               strong { (user.account_based_in) }
+               @if !user.connection_source.is_empty() {
+                   span { "Connected via " (user.connection_source) }
+               }
+               @if user.location_accurate == Some(false) {
+                   span class="tweet-account-popover-warning" {
+                       "Location may be affected by a proxy or VPN."
+                   }
+               }
+               small { "Account-level information, not a live location or per-post device." }
+           }
+       }
+   }
+}
+
 /// Render tweet text and location as a single HTML string (for verbatim
 /// output). This avoids wrapping in an extra `<p>` tag. The original version
 /// uses `verbatim` directly inside the content div.
@@ -922,10 +985,10 @@ pub fn render_reply_chains(
                            div class="timeline-item more-replies" {
                                @if last_in_chain.available {
                                    a class="more-replies-text" href=(format!("/{}/status/{}#m", last_in_chain.user.username, last_in_chain.id)) {
-                                       "more replies"
+                                       "View more replies"
                                    }
                                } @else {
-                                   a class="more-replies-text" { "more replies" }
+                                   a class="more-replies-text" { "View more replies" }
                                }
                            }
                        }

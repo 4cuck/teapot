@@ -14,6 +14,7 @@ use crate::{
 };
 
 pub const STYLE_CSS: &str = "/css/style.css";
+pub const CLEAN_CSS: &str = "/css/clean.css";
 pub const FONTELLO_CSS: &str = "/css/fontello.css";
 
 /// Builder for rendering a full page layout.
@@ -179,6 +180,8 @@ impl<'a> PageLayout<'a> {
 
                   // Main CSS + icon fonts (with cache-busting)
                   link rel="stylesheet" type="text/css" href=(STYLE_CSS);
+                  // After the component styles, whose layout decisions it replaces.
+                  link rel="stylesheet" type="text/css" href=(CLEAN_CSS);
                   link rel="stylesheet" type="text/css" href=(FONTELLO_CSS);
                   // Theme CSS if different from default
                   @if let Some(ref href) = theme_href {
@@ -234,6 +237,8 @@ impl<'a> PageLayout<'a> {
                   // Scripts in <head> with defer
                   script src="/js/htmx.min.js" defer="" {}
                   script src="/js/site.js" defer="" {}
+                  script src="/js/threadContext.js" defer="" {}
+                  script src="/js/imageLightbox.js" defer="" {}
                   @if infinite_scroll {
                       script src="/js/infiniteScroll.js" defer="" {}
                   }
@@ -292,10 +297,10 @@ pub fn render_navbar_full(config: &Config, rss: &str, canonical: &str, referer: 
        nav {
            div class="inner-nav" {
                div class="nav-item" {
-                   a class="site-name" href="/" { (config.server.title) }
-               }
-               a href="/" {
-                   img class="site-logo" src="/logo.svg" alt=(format!("{} logo", config.server.title));
+                   a class="site-brand" href="/" {
+                       img class="site-logo" src="/logo.svg" alt="";
+                       span class="site-name" { (config.server.title) }
+                   }
                }
                div class="nav-item right" {
                    a class="nav-icon sister-site" title="owo.vg — 4chan frontend" href="https://owo.vg" target="_blank" rel="noopener noreferrer" {
@@ -323,6 +328,35 @@ pub fn render_navbar_full(config: &Config, rss: &str, canonical: &str, referer: 
                    }
                    a class="nav-icon" title="Preferences" href=(&settings_href) {
                        span class="icon-cog" aria-hidden="true" {}
+                   }
+               }
+               details class="mobile-nav" {
+                   summary aria-label="Open navigation menu" {
+                       (PreEscaped(r#"<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>"#))
+                   }
+                   div class="mobile-nav-menu" {
+                       a href="https://owo.vg" target="_blank" rel="noopener noreferrer" {
+                           img src="/public/icons/4chan.png" alt="" width="18" height="18";
+                           "owo.vg"
+                       }
+                       a href="https://soyjak.cf" target="_blank" rel="noopener noreferrer" {
+                           img src=(random_soyjak_icon()) alt="" width="18" height="18";
+                           "soyjak.cf"
+                       }
+                       a href="https://awoo.cf" target="_blank" rel="noopener noreferrer" {
+                           img src="/public/icons/awoo.png" alt="" width="18" height="18";
+                           "awoo.cf"
+                       }
+                       a href="/search" { span class="icon-search" aria-hidden="true" {} "Search" }
+                       @if config.config.enable_rss && !rss.is_empty() {
+                           a href=(rss) { span class="icon-rss" aria-hidden="true" {} "RSS feed" }
+                       }
+                       a href=(&canonical) {
+                           (PreEscaped(r#"<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.737-8.834L1.254 2.25H8.08l4.259 5.622L18.244 2.25zm-1.161 17.52h1.833L7.084 4.126H5.117L17.083 19.77z"/></svg>"#))
+                           "Open in X"
+                       }
+                       a href="/about" { span class="icon-info" aria-hidden="true" {} "About" }
+                       a href=(&settings_href) { span class="icon-cog" aria-hidden="true" {} "Preferences" }
                    }
                }
            }
