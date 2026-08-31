@@ -5,7 +5,10 @@ use serde::{
    Deserialize,
    de::DeserializeOwned,
 };
-use tokio::time::timeout;
+use tokio::time::{
+   sleep,
+   timeout,
+};
 
 use super::{
    SessionLease,
@@ -66,6 +69,10 @@ use crate::{
 
 /// A search spends a `SearchTimeline` call and is never served from cache.
 const SEARCH_COST: f64 = 2.0;
+/// First try plus this many replacements. Empty GraphQL 404s often hit several
+/// sessions in a row before X answers.
+const GRAPHQL_REPLACEMENTS: usize = 4;
+const TRANSIENT_RETRY_WAIT: Duration = Duration::from_millis(200);
 
 /// Community-cache strings are written by third parties, so cap them before
 /// they reach a page.
@@ -434,7 +441,7 @@ impl ApiClient {
    /// through a cookie session would still send the OAuth endpoint.
    async fn graphql_request_with_session<T>(
       &self,
-      session: SessionLease,
+      mut session: SessionLease,
       endpoint: &str,
       variables: &str,
       features: &str,
@@ -444,45 +451,57 @@ impl ApiClient {
    where
       T: DeserializeOwned,
    {
-      let session_id = session.id;
-      let first = self
+      let mut last = self
          .graphql_request_inner(&session, endpoint, variables, features, field_toggles)
          .await;
 
-      match first {
-         Err(Error::SessionRejected(_)) => {},
-         Err(Error::RateLimited)
-            if self
-               .sessions
-               .has_unlimited(endpoint, retry_kind, session_id)
-               .await => {},
-         // GraphQL 404 is often a blip (WAF, a sick session), not a missing
-         // tweet or user. Retry once before telling the reader it is gone.
-         Err(Error::NotFound(_)) => {},
-         other => return other,
-      }
+      for _ in 0..GRAPHQL_REPLACEMENTS {
+         let session_id = session.id;
+         let retry = match &last {
+            Err(Error::SessionRejected(_))
+            | Err(Error::NotFound(_))
+            | Err(Error::TransientUpstream) => true,
+            Err(Error::RateLimited) => {
+               self
+                  .sessions
+                  .has_unlimited(endpoint, retry_kind, session_id)
+                  .await
+            },
+            _ => false,
+         };
+         if !retry {
+            return last;
+         }
+         if matches!(
+            last,
+            Err(Error::NotFound(_)) | Err(Error::TransientUpstream)
+         ) {
+            sleep(TRANSIENT_RETRY_WAIT).await;
+         }
 
-      tracing::warn!(
-         session_id,
-         endpoint,
-         "session unusable, retrying on another"
-      );
-      drop(session);
-      self.charge(endpoint).await?;
-      let retry = match self
-         .sessions
-         .acquire_excluding(endpoint, retry_kind, Some(session_id))
-         .await
-      {
-         Ok(retry) => retry,
-         Err(err) => {
-            self.refund(endpoint).await;
-            return first.and(Err(err));
-         },
-      };
-      self
-         .graphql_request_inner(&retry, endpoint, variables, features, field_toggles)
-         .await
+         tracing::warn!(
+            session_id,
+            endpoint,
+            "session unusable, retrying on another"
+         );
+         drop(session);
+         self.charge(endpoint).await?;
+         session = match self
+            .sessions
+            .acquire_excluding(endpoint, retry_kind, Some(session_id))
+            .await
+         {
+            Ok(next) => next,
+            Err(err) => {
+               self.refund(endpoint).await;
+               return last.and(Err(err));
+            },
+         };
+         last = self
+            .graphql_request_inner(&session, endpoint, variables, features, field_toggles)
+            .await;
+      }
+      last
    }
 
    /// Take a session for one upstream call, billing the caller first.
@@ -687,14 +706,20 @@ impl ApiClient {
             return Err(Error::SessionRejected(format!("Status {status}: {body}")));
          }
 
-         // Deleted tweets, missing users, and dead media URLs come back as
-         // HTTP 404. Those are not instance faults.
+         // Empty or HTML 404s are X/WAF blips, not a missing tweet or user.
+         // JSON 404s can still be a real gone resource.
          if status.as_u16() == 404 {
             tracing::warn!(
                session_id = session.id,
                session_user = %session.username,
                "API 404: {body}"
             );
+            if body.trim().is_empty() || serde_json::from_str::<serde_json::Value>(&body).is_err() {
+               return Err(Error::TransientUpstream);
+            }
+            if let Err(err) = Self::check_api_errors(body.as_bytes()) {
+               return Err(err);
+            }
             return Err(Error::NotFound("Not found".into()));
          }
 

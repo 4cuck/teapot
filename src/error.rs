@@ -122,6 +122,9 @@ pub enum Error {
    #[error("Client budget exhausted")]
    ClientBudgetExhausted,
 
+   #[error("Upstream returned nothing")]
+   TransientUpstream,
+
    #[error("Not found: {0}")]
    NotFound(String),
 
@@ -204,6 +207,13 @@ impl Error {
                StatusCode::TOO_MANY_REQUESTS,
                "Rate limited",
                rate_limited_message(),
+            )
+         },
+         Self::TransientUpstream => {
+            (
+               StatusCode::SERVICE_UNAVAILABLE,
+               "Try again",
+               "X did not return a result. Refresh in a moment.",
             )
          },
          // Out of sessions is an operator problem, not an upstream quota one.
