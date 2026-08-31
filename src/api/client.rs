@@ -250,6 +250,24 @@ fn article_tweet_data<'a>(data: &'a ConversationData, tweet_id: &str) -> Option<
    raw.tweet.as_deref().or(Some(raw))
 }
 
+fn twitter_error_code(body: &str) -> Option<i64> {
+   #[derive(Deserialize)]
+   struct ErrorCheck {
+      errors: Option<Vec<CodeOnly>>,
+   }
+   #[derive(Deserialize)]
+   struct CodeOnly {
+      #[serde(default)]
+      code: i64,
+   }
+   serde_json::from_str::<ErrorCheck>(body)
+      .ok()?
+      .errors?
+      .into_iter()
+      .map(|error| error.code)
+      .find(|code| *code != 0)
+}
+
 /// Twitter/X API client.
 #[derive(Clone)]
 pub struct ApiClient {
@@ -367,20 +385,20 @@ impl ApiClient {
                Err(Error::UserNotFound(error.message.clone()))
             },
             TwitterError::ProtectedUser => Err(Error::ProtectedUser(error.message.clone())),
-            TwitterError::UserSuspended | TwitterError::Locked => {
-               Err(Error::UserSuspended(error.message.clone()))
-            },
+            TwitterError::UserSuspended => Err(Error::UserSuspended(error.message.clone())),
             TwitterError::RateLimited => Err(Error::RateLimited),
             TwitterError::TweetNotFound
             | TwitterError::TweetUnavailable
             | TwitterError::NoStatusFound
             | TwitterError::TweetUnavailable421
             | TwitterError::TweetCensored => Err(Error::TweetNotFound(error.message.clone())),
-            TwitterError::InvalidToken | TwitterError::BadToken => {
-               Err(Error::TwitterApi(format!(
-                  "Invalid token: {}",
-                  error.message
-               )))
+            // 326 is *our* cookie session locked, not the profile the reader
+            // opened. Mapping it to UserSuspended made live accounts look
+            // banned until a refresh hit a different session.
+            TwitterError::Locked
+            | TwitterError::InvalidToken
+            | TwitterError::BadToken => {
+               Err(Error::SessionRejected(error.message.clone()))
             },
          };
       }
@@ -438,6 +456,9 @@ impl ApiClient {
                .sessions
                .has_unlimited(endpoint, retry_kind, session_id)
                .await => {},
+         // GraphQL 404 is often a blip (WAF, a sick session), not a missing
+         // tweet or user. Retry once before telling the reader it is gone.
+         Err(Error::NotFound(_)) => {},
          other => return other,
       }
 
@@ -580,9 +601,7 @@ impl ApiClient {
       // Mark the session as limited on token errors so the retry picks
       // a different one.
       let api_check = Self::check_api_errors(&bytes);
-      if let Err(Error::TwitterApi(ref msg)) = api_check
-         && msg.starts_with("Invalid token")
-      {
+      if let Err(Error::SessionRejected(ref msg)) = api_check {
          self.sessions.mark_rejected(session.id).await;
          return Err(Error::SessionRejected(msg.clone()));
       }
@@ -653,9 +672,12 @@ impl ApiClient {
             return Err(Error::RateLimited);
          }
 
-         // Only 401 means the credentials themselves were refused. A 403 is an
-         // authenticated request denied a particular resource.
-         if status.as_u16() == 401 {
+         // 401 is a dead token. 403 + code 326 is a locked cookie session.
+         // Anything else 403 is a resource denial and must not sideline the
+         // session or the next reader will think the *profile* is gone.
+         if status.as_u16() == 401
+            || (status.as_u16() == 403 && twitter_error_code(&body) == Some(326))
+         {
             tracing::error!(
                session_id = session.id,
                session_user = %session.username,
@@ -668,7 +690,7 @@ impl ApiClient {
          // Deleted tweets, missing users, and dead media URLs come back as
          // HTTP 404. Those are not instance faults.
          if status.as_u16() == 404 {
-            tracing::debug!(
+            tracing::warn!(
                session_id = session.id,
                session_user = %session.username,
                "API 404: {body}"
