@@ -2,6 +2,7 @@ mod auth;
 pub mod budget;
 mod client;
 mod endpoints;
+mod filters;
 pub mod http;
 mod parser;
 pub mod schema;

@@ -111,6 +111,7 @@ async fn main() -> eyre::Result<()> {
 
    // Initialize API client
    let api = ApiClient::new(&config, sessions);
+   api.spawn_filter_sync();
 
    // Initialize GIF transcoder if local mode
    let http_client = HttpClient::new(&config.config.proxy, &config.config.proxy_auth);

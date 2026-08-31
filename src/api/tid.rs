@@ -59,11 +59,17 @@ impl TidClient {
    /// Generate a transaction ID for a request path, or [`None`] if TID is
    /// unavailable.
    pub async fn generate(&self, path: &str) -> Option<String> {
+      self.generate_for("GET", path).await
+   }
+
+   /// Same as [`Self::generate`], with an explicit HTTP method. X hashes the
+   /// method into the transaction ID, so POSTs must not reuse the GET variant.
+   pub async fn generate_for(&self, method: &str, path: &str) -> Option<String> {
       self.ensure_fresh().await;
       let guard = self.inner.read().await;
       guard
          .as_ref()
-         .map(|ct| ct.generate_transaction_id("GET", path))
+         .map(|ct| ct.generate_transaction_id(method, path))
    }
 
    /// Refresh the TID client if stale. Uses `try_lock` so only one task

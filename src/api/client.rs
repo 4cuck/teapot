@@ -253,11 +253,11 @@ fn article_tweet_data<'a>(data: &'a ConversationData, tweet_id: &str) -> Option<
 /// Twitter/X API client.
 #[derive(Clone)]
 pub struct ApiClient {
-   client:      HttpClient,
-   sessions:    SessionPool,
-   tid:         TidClient,
-   budget:      ClientBudget,
-   tid_enabled: bool,
+   pub(crate) client:   HttpClient,
+   pub(crate) sessions: SessionPool,
+   tid:                 TidClient,
+   budget:              ClientBudget,
+   tid_enabled:         bool,
 }
 
 impl ApiClient {
@@ -299,13 +299,30 @@ impl ApiClient {
       }
    }
 
-   async fn bearer_and_tid(&self, api_path: &str) -> (&'static str, Option<String>) {
+   pub(crate) async fn bearer_and_tid(&self, api_path: &str) -> (&'static str, Option<String>) {
       if !self.tid_enabled {
          return (endpoints::BEARER_TOKEN_NO_TID, None);
       }
       self
          .tid
          .generate(api_path)
+         .await
+         .map_or((endpoints::BEARER_TOKEN_NO_TID, None), |tid| {
+            (endpoints::BEARER_TOKEN, Some(tid))
+         })
+   }
+
+   pub(crate) async fn bearer_and_tid_for(
+      &self,
+      method: &str,
+      api_path: &str,
+   ) -> (&'static str, Option<String>) {
+      if !self.tid_enabled {
+         return (endpoints::BEARER_TOKEN_NO_TID, None);
+      }
+      self
+         .tid
+         .generate_for(method, api_path)
          .await
          .map_or((endpoints::BEARER_TOKEN_NO_TID, None), |tid| {
             (endpoints::BEARER_TOKEN, Some(tid))
@@ -585,7 +602,7 @@ impl ApiClient {
    /// Every authenticated call to X goes through here, or its 429s and refused
    /// credentials never reach the pool. The flag reports whether the headers
    /// recorded a real window, so a code 88 does not overwrite one.
-   async fn account_response(
+   pub(crate) async fn account_response(
       &self,
       session: &SessionLease,
       endpoint: &str,

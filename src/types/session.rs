@@ -42,8 +42,12 @@ pub struct SessionLimits {
    /// The credentials themselves were refused, which no amount of waiting
    /// fixes, so this is kept apart from the rate-limit state that expires.
    #[serde(skip)]
-   pub rejected:   bool,
-   pub apis:       HashMap<String, RateLimit>,
+   pub rejected:        bool,
+   /// Sensitive-media and search-safety filters have already been turned off
+   /// for this session, so startup does not POST the same settings again.
+   #[serde(default)]
+   pub filters_cleared: bool,
+   pub apis:            HashMap<String, RateLimit>,
 }
 
 /// How long a globally-limited session stays limited before auto-recovery (15
@@ -128,10 +132,11 @@ impl Session {
             ct0:          self.ct0,
          },
          SessionLimits {
-            limited:    self.limited,
-            limited_at: self.limited_at,
-            rejected:   false,
-            apis:       self.apis,
+            limited:         self.limited,
+            limited_at:      self.limited_at,
+            rejected:        false,
+            filters_cleared: false,
+            apis:            self.apis,
          },
       )
    }

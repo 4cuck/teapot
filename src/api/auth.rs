@@ -475,6 +475,73 @@ impl SessionPool {
       self.sessions.is_empty()
    }
 
+   /// Cookie sessions that still have X's default sensitive-content filters on.
+   pub async fn pending_filter_sync_ids(&self) -> Vec<i64> {
+      let limits = self.limits.read().await;
+      self
+         .sessions
+         .iter()
+         .filter_map(|slot| {
+            if slot.credentials.kind != SessionKind::Cookie {
+               return None;
+            }
+            if limits
+               .get(&slot.credentials.id)
+               .is_some_and(|session_limits| session_limits.filters_cleared)
+            {
+               return None;
+            }
+            Some(slot.credentials.id)
+         })
+         .collect()
+   }
+
+   /// Take a specific session, for startup work that must hit that account.
+   pub async fn acquire_id(&self, session_id: i64, api: &str) -> Result<SessionLease> {
+      let slot = self
+         .sessions
+         .iter()
+         .find(|slot| slot.credentials.id == session_id)
+         .ok_or(Error::NoSessions)?;
+      let limits = self.limits.read().await;
+      if limits
+         .get(&session_id)
+         .is_some_and(|session_limits| session_limits.rejected)
+      {
+         return Err(Error::SessionRejected(format!(
+            "session {session_id} rejected"
+         )));
+      }
+      if limits
+         .get(&session_id)
+         .is_some_and(|session_limits| session_limits.is_limited(api))
+      {
+         return Err(Error::RateLimited);
+      }
+      let credentials = Arc::clone(&slot.credentials);
+      let permits = Arc::clone(&slot.permits);
+      drop(limits);
+      let permit = permits
+         .acquire_owned()
+         .await
+         .map_err(|_| Error::Internal("session request limiter closed".into()))?;
+      Ok(SessionLease {
+         credentials,
+         _permit: permit,
+      })
+   }
+
+   /// Remember that this session already had sensitive-content filters turned
+   /// off, so a restart does not spend the same writes again.
+   pub async fn mark_filters_cleared(&self, session_id: i64) {
+      let mut limits = self.limits.write().await;
+      if let Some(lim) = limits.get_mut(&session_id) {
+         lim.filters_cleared = true;
+      }
+      drop(limits);
+      self.persist_now().await;
+   }
+
    /// Cookie header for a cookie session, for requests that fetch x.com's web
    /// app rather than the API. Takes no concurrency permit, since those pages
    /// are outside the per-session API rate limits.

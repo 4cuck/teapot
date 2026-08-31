@@ -27,7 +27,7 @@ use bytes::Bytes;
 use flate2::read::GzDecoder;
 use http_body_util::{
    BodyExt as _,
-   Empty,
+   Full,
 };
 use hyper::{
    StatusCode,
@@ -93,7 +93,7 @@ struct ProxyConfig {
    reason = "HttpClient is clearer than Client"
 )]
 pub struct HttpClient {
-   inner:           Client<Connector, Empty<Bytes>>,
+   inner:           Client<Connector, Full<Bytes>>,
    default_headers: HeaderMap,
    proxy:           Option<ProxyConfig>,
    tls:             Arc<rustls::ClientConfig>,
@@ -227,13 +227,21 @@ impl HttpClient {
       self
    }
 
-   /// Send a request with a given method and optional extra headers.
-   async fn send(&self, method: Method, uri: &str, extra_headers: &HeaderMap) -> Result<Response> {
+   /// Send a request with a given method, optional extra headers, and body.
+   async fn send(
+      &self,
+      method: Method,
+      uri: &str,
+      extra_headers: &HeaderMap,
+      body: Bytes,
+   ) -> Result<Response> {
       timeout(REQUEST_TIMEOUT, async {
          if let Some(ref proxy) = self.proxy {
-            self.send_via_proxy(proxy, method, uri, extra_headers).await
+            self
+               .send_via_proxy(proxy, method, uri, extra_headers, body)
+               .await
          } else {
-            self.send_direct(method, uri, extra_headers).await
+            self.send_direct(method, uri, extra_headers, body).await
          }
       })
       .await
@@ -246,6 +254,7 @@ impl HttpClient {
       method: Method,
       uri: &str,
       extra_headers: &HeaderMap,
+      body: Bytes,
    ) -> Result<Response> {
       let parsed: Uri = uri
          .parse()
@@ -260,7 +269,7 @@ impl HttpClient {
       }
 
       let request = builder
-         .body(Empty::<Bytes>::new())
+         .body(Full::new(body))
          .map_err(|err| Error::Internal(format!("build request: {err}")))?;
 
       let resp = self
@@ -284,6 +293,7 @@ impl HttpClient {
       method: Method,
       uri: &str,
       extra_headers: &HeaderMap,
+      body: Bytes,
    ) -> Result<Response> {
       let parsed: Uri = uri
          .parse()
@@ -386,7 +396,7 @@ impl HttpClient {
          }
 
          let request = builder
-            .body(Empty::<Bytes>::new())
+            .body(Full::new(body))
             .map_err(|err| Error::Internal(format!("build proxied request: {err}")))?;
 
          let resp = sender
@@ -428,7 +438,7 @@ impl HttpClient {
          }
 
          let request = builder
-            .body(Empty::<Bytes>::new())
+            .body(Full::new(body))
             .map_err(|err| Error::Internal(format!("build proxied request: {err}")))?;
 
          let resp = sender
@@ -447,17 +457,33 @@ impl HttpClient {
 
    /// Send a GET request.
    pub async fn get(&self, uri: &str) -> Result<Response> {
-      self.send(Method::GET, uri, &HeaderMap::new()).await
+      self
+         .send(Method::GET, uri, &HeaderMap::new(), Bytes::new())
+         .await
    }
 
    /// Send a GET request with additional headers.
    pub async fn get_with_headers(&self, uri: &str, extra_headers: &HeaderMap) -> Result<Response> {
-      self.send(Method::GET, uri, extra_headers).await
+      self
+         .send(Method::GET, uri, extra_headers, Bytes::new())
+         .await
+   }
+
+   /// Send a POST request with additional headers and a body.
+   pub async fn post_with_headers(
+      &self,
+      uri: &str,
+      extra_headers: &HeaderMap,
+      body: Bytes,
+   ) -> Result<Response> {
+      self.send(Method::POST, uri, extra_headers, body).await
    }
 
    /// Send a HEAD request.
    pub async fn head(&self, uri: &str) -> Result<Response> {
-      self.send(Method::HEAD, uri, &HeaderMap::new()).await
+      self
+         .send(Method::HEAD, uri, &HeaderMap::new(), Bytes::new())
+         .await
    }
 }
 
