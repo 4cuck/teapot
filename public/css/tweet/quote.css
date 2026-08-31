@@ -99,3 +99,8 @@
   top: 0;
   position: absolute;
 }
+
+.quote .translate-btn {
+  position: relative;
+  z-index: 2;
+}
