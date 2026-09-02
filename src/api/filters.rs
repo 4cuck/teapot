@@ -94,7 +94,11 @@ impl ApiClient {
          .await?;
       let response = self
          .client
-         .get_with_headers(endpoints::VERIFY_CREDENTIALS_URL, &headers)
+         .get_on(
+            endpoints::VERIFY_CREDENTIALS_URL,
+            &headers,
+            self.proxy_for(session).as_ref(),
+         )
          .await?;
       let (bytes, _) = self
          .account_response(session, endpoints::VERIFY_CREDENTIALS, response)
@@ -123,10 +127,11 @@ impl ApiClient {
       );
       let response = self
          .client
-         .post_with_headers(
+         .post_on(
             endpoints::ACCOUNT_SETTINGS_URL,
             &headers,
             Bytes::from_static(DISPLAY_SENSITIVE_BODY.as_bytes()),
+            self.proxy_for(session).as_ref(),
          )
          .await?;
       let (bytes, _) = self
@@ -159,10 +164,11 @@ impl ApiClient {
       );
       let response = self
          .client
-         .post_with_headers(
+         .post_on(
             &url,
             &headers,
             Bytes::from_static(SEARCH_SAFETY_BODY.as_bytes()),
+            self.proxy_for(session).as_ref(),
          )
          .await?;
       let _ = self

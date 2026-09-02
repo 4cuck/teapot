@@ -49,6 +49,8 @@ fn test_config() -> Config {
          proxy:                   String::new(),
          proxy_auth:              String::new(),
          api_proxy:               String::new(),
+         socks_proxies_file:      String::new(),
+         session_proxies_file:    String::new(),
          disable_tid:             false,
          x_posed_community_cache: false,
          max_concurrent_reqs:     2,

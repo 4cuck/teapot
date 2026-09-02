@@ -8,7 +8,14 @@ use axum::{
       RawQuery,
       State,
    },
-   http::header::CONTENT_TYPE,
+   http::{
+      StatusCode,
+      header::{
+         CACHE_CONTROL,
+         CONTENT_TYPE,
+         REFRESH,
+      },
+   },
    response::{
       Html,
       IntoResponse as _,
@@ -18,17 +25,29 @@ use axum::{
    routing::get,
 };
 use axum_extra::extract::CookieJar;
+use maud::html;
 use serde::Deserialize;
 
 use super::helpers;
 use crate::{
    AppState,
-   error::Result,
+   cache::{
+      keys as cache_keys,
+      ttl,
+   },
+   config::Config,
+   error::{
+      Error,
+      Result,
+   },
    types::{
+      PaginatedResult,
       Prefs,
       Query,
       QueryKind,
+      Timeline,
       Tweet,
+      User,
    },
    views::{
       layout,
@@ -88,6 +107,11 @@ pub struct SearchQuery {
    pub e_replies:  Option<String>,
    #[serde(rename = "e-retweets")]
    pub e_retweets: Option<String>,
+   /// Browser auto-retry count after an empty SearchTimeline 404.
+   #[serde(default)]
+   pub retry:      u8,
+   /// AJAX infinite-scroll request — return a timeline fragment, not a page.
+   pub scroll:     Option<String>,
 }
 
 impl SearchQuery {
@@ -181,6 +205,83 @@ impl SearchQuery {
    }
 }
 
+const SEARCH_AUTO_RETRIES: u8 = 2;
+const SEARCH_RETRY_WAIT_SECS: u8 = 2;
+
+fn with_retry_param(raw_qs: &str, retry: u8) -> String {
+   let rest = raw_qs
+      .split('&')
+      .filter(|pair| {
+         !pair.is_empty() && !pair.starts_with("retry=") && !pair.starts_with("scroll=")
+      })
+      .collect::<Vec<_>>();
+   if rest.is_empty() {
+      format!("/search?retry={retry}")
+   } else {
+      format!("/search?{}&retry={retry}", rest.join("&"))
+   }
+}
+
+fn is_scroll_request(params: &SearchQuery) -> bool {
+   params.scroll.as_deref() == Some("true")
+}
+
+fn search_error(
+   config: &Config,
+   prefs: &Prefs,
+   raw_qs: Option<&str>,
+   params: &SearchQuery,
+   err: &Error,
+) -> Response {
+   if is_scroll_request(params) {
+      // A 200 "Trying again…" page looks like success to infiniteScroll.js,
+      // which then drops the Load more sentinel and cannot page further.
+      return helpers::api_error_titled(config, err, "Search Error");
+   }
+   search_upstream_error(config, prefs, raw_qs, params.retry, err)
+}
+
+fn search_upstream_error(
+   config: &Config,
+   prefs: &Prefs,
+   raw_qs: Option<&str>,
+   attempt: u8,
+   err: &Error,
+) -> Response {
+   if matches!(err, Error::TransientUpstream) && attempt < SEARCH_AUTO_RETRIES {
+      let url = with_retry_param(raw_qs.unwrap_or(""), attempt + 1);
+      let wait = SEARCH_RETRY_WAIT_SECS;
+      tracing::warn!(attempt, %url, "search empty, auto-retrying in the browser");
+      let refresh = html! {
+          meta http-equiv="refresh" content=(format!("{wait};url={url}"));
+      };
+      let content = html! {
+          div class="panel-container" {
+              div class="error-panel" {
+                  span { "X did not return a result. Trying again…" }
+                  " "
+                  a href=(&url) { "Retry now" }
+              }
+          }
+      };
+      let markup = layout::PageLayout::new(config, "Try again", content)
+         .prefs(prefs)
+         .head_extra(&refresh)
+         .description("X did not return a result. Trying again…")
+         .render();
+      return (
+         StatusCode::OK,
+         [
+            (REFRESH, format!("{wait};url={url}")),
+            (CACHE_CONTROL, "no-store".to_owned()),
+         ],
+         Html(markup.into_string()),
+      )
+         .into_response();
+   }
+   helpers::api_error_titled(config, err, "Search Error")
+}
+
 pub fn router() -> Router<AppState> {
    Router::new()
       .route("/search", get(search))
@@ -212,6 +313,7 @@ async fn search(
 
    // Extract prefs from cookies
    let prefs = Prefs::from_cookies(&jar, &state.config);
+   let is_scroll = is_scroll_request(&params);
 
    let raw_q = params.query.clone().unwrap_or_default();
 
@@ -271,14 +373,41 @@ async fn search(
    }
 
    if is_user_search {
-      // User search
-      let search_result = state
-         .api
-         .search_users(&raw_q, params.cursor.as_deref())
-         .await;
+      let search_result = if params.cursor.is_none() {
+         let cache_key = cache_keys::search_users(&raw_q, None);
+         if let Some(cached) = helpers::swr_take::<PaginatedResult<User>, _, _>(&state, &cache_key, {
+            let raw_q = raw_q.clone();
+            let cache_key = cache_key.clone();
+            move |state| async move {
+               if let Ok(data) = state.api.search_users(&raw_q, None).await {
+                  state
+                     .cache
+                     .set_swr(&cache_key, &data, ttl::SEARCH, ttl::SEARCH_STALE);
+               }
+            }
+         }) {
+            Ok(cached)
+         } else {
+            let result = state.api.search_users(&raw_q, None).await;
+            if let Ok(ref data) = result {
+               state
+                  .cache
+                  .set_swr(&cache_key, data, ttl::SEARCH, ttl::SEARCH_STALE);
+            }
+            result
+         }
+      } else {
+         state
+            .api
+            .search_users(&raw_q, params.cursor.as_deref())
+            .await
+      };
 
       match search_result {
          Ok(result) => {
+            for user in &result.content {
+               helpers::remember_user_id(&state, user);
+            }
             let cursor = result.bottom.as_deref();
 
             let newer_url = params.cursor.is_some().then(|| {
@@ -304,6 +433,9 @@ async fn search(
                "/search?q={}&f=users",
                percent_encoding::utf8_percent_encode(&raw_q, percent_encoding::NON_ALPHANUMERIC)
             );
+            if is_scroll {
+               return Ok(Html(content.into_string()).into_response());
+            }
             let markup = layout::PageLayout::new(&state.config, &title, content)
                .prefs(&prefs)
                .canonical(&canonical)
@@ -312,10 +444,12 @@ async fn search(
             Ok(Html(markup.into_string()).into_response())
          },
          Err(err) => {
-            Ok(helpers::api_error_titled(
+            Ok(search_error(
                &state.config,
+               &prefs,
+               raw_qs.as_deref(),
+               &params,
                &err,
-               "Search Error",
             ))
          },
       }
@@ -339,16 +473,42 @@ async fn search(
          _ => "tweets",
       };
 
-      // Execute search
-      let search_result = state
-         .api
-         .search(&api_query, params.cursor.as_deref(), product)
-         .await;
+      let search_result = if params.cursor.is_none() {
+         let cache_key = cache_keys::search_timeline(&api_query, product, None);
+         if let Some(cached) = helpers::swr_take::<Timeline, _, _>(&state, &cache_key, {
+            let api_query = api_query.clone();
+            let cache_key = cache_key.clone();
+            move |state| async move {
+               if let Ok(data) = state.api.search(&api_query, None, product).await {
+                  state
+                     .cache
+                     .set_swr(&cache_key, &data, ttl::SEARCH, ttl::SEARCH_STALE);
+               }
+            }
+         }) {
+            Ok(cached)
+         } else {
+            let result = state.api.search(&api_query, None, product).await;
+            if let Ok(ref data) = result {
+               state
+                  .cache
+                  .set_swr(&cache_key, data, ttl::SEARCH, ttl::SEARCH_STALE);
+            }
+            result
+         }
+      } else {
+         state
+            .api
+            .search(&api_query, params.cursor.as_deref(), product)
+            .await
+      };
 
       match search_result {
          Ok(timeline) => {
             let mut tweets = dedup_search_tweets(timeline.content.into_iter().flatten().collect());
             helpers::enrich_tweet_groups(&state, slice::from_mut(&mut tweets)).await;
+            helpers::remember_tweets(&state, &tweets);
+            helpers::prefetch_profiles(&state, &tweets);
             let cursor = timeline.bottom.as_deref();
 
             // Display the original user query, not the API query
@@ -388,6 +548,9 @@ async fn search(
                "/search?q={}",
                percent_encoding::utf8_percent_encode(&raw_q, percent_encoding::NON_ALPHANUMERIC)
             );
+            if is_scroll {
+               return Ok(Html(content.into_string()).into_response());
+            }
             let markup = layout::PageLayout::new(&state.config, &title, content)
                .prefs(&prefs)
                .rss(&rss_url)
@@ -397,10 +560,12 @@ async fn search(
             Ok(Html(markup.into_string()).into_response())
          },
          Err(err) => {
-            Ok(helpers::api_error_titled(
+            Ok(search_error(
                &state.config,
+               &prefs,
+               raw_qs.as_deref(),
+               &params,
                &err,
-               "Search Error",
             ))
          },
       }
@@ -421,9 +586,10 @@ async fn hashtag(
       jar,
       RawQuery(None),
       AxumQuery(SearchQuery {
-         query: Some(hashtag_query),
+         query:  Some(hashtag_query),
          filter: query.filter,
          cursor: query.cursor,
+         scroll: query.scroll,
          ..Default::default()
       }),
    )

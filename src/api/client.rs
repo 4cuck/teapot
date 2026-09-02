@@ -1,16 +1,14 @@
-use std::time::Duration;
+use std::sync::Arc;
 
 use axum::http::header;
 use serde::{
    Deserialize,
    de::DeserializeOwned,
 };
-use tokio::time::{
-   sleep,
-   timeout,
-};
+use tokio::time::timeout;
 
 use super::{
+   ProxyPool,
    SessionLease,
    SessionPool,
    TidClient,
@@ -19,7 +17,10 @@ use super::{
       ClientBudget,
    },
    endpoints,
-   http::HttpClient,
+   http::{
+      HttpClient,
+      ProxyConfig,
+   },
    parser,
 };
 use crate::{
@@ -69,10 +70,13 @@ use crate::{
 
 /// A search spends a `SearchTimeline` call and is never served from cache.
 const SEARCH_COST: f64 = 2.0;
-/// First try plus this many replacements. Empty GraphQL 404s often hit several
-/// sessions in a row before X answers.
-const GRAPHQL_REPLACEMENTS: usize = 4;
-const TRANSIENT_RETRY_WAIT: Duration = Duration::from_millis(200);
+/// First try plus this many replacements for a locked session or empty 404.
+/// Each attempt spends SearchTimeline quota (50/15m per account), so this
+/// must stay small.
+const GRAPHQL_REPLACEMENTS: usize = 2;
+/// Per-account 429 (JSON / `x-rate-limit-*`). HTML 429s are the WAF and must
+/// not walk the pool — that used to zero every cookie for 15 minutes.
+const RATE_LIMIT_REPLACEMENTS: usize = 5;
 
 /// Community-cache strings are written by third parties, so cap them before
 /// they reach a page.
@@ -280,13 +284,14 @@ fn twitter_error_code(body: &str) -> Option<i64> {
 pub struct ApiClient {
    pub(crate) client:   HttpClient,
    pub(crate) sessions: SessionPool,
+   proxies:             Option<Arc<ProxyPool>>,
    tid:                 TidClient,
    budget:              ClientBudget,
    tid_enabled:         bool,
 }
 
 impl ApiClient {
-   pub fn new(config: &Config, sessions: SessionPool) -> Self {
+   pub fn new(config: &Config, sessions: SessionPool, proxies: Option<ProxyPool>) -> Self {
       let mut headers = header::HeaderMap::new();
       headers.insert(
          header::USER_AGENT,
@@ -310,18 +315,28 @@ impl ApiClient {
       } else {
          &config.config.api_proxy
       };
-      let client =
+      let mut client =
          HttpClient::new(api_proxy, &config.config.proxy_auth).with_default_headers(headers);
+      if api_proxy.is_empty()
+         && let Some(ref pool) = proxies
+      {
+         client = client.with_default_proxy(pool.first());
+      }
 
       let tid = TidClient::new(client.clone(), sessions.clone());
 
       Self {
          client,
          sessions,
+         proxies: proxies.map(Arc::new),
          tid,
          budget: ClientBudget::new(config.config.client_budget),
          tid_enabled: !config.config.disable_tid,
       }
+   }
+
+   pub(crate) fn proxy_for(&self, session: &SessionLease) -> Option<ProxyConfig> {
+      self.proxies.as_ref().map(|pool| pool.for_session(session.id))
    }
 
    pub(crate) async fn bearer_and_tid(&self, api_path: &str) -> (&'static str, Option<String>) {
@@ -455,13 +470,13 @@ impl ApiClient {
          .graphql_request_inner(&session, endpoint, variables, features, field_toggles)
          .await;
 
-      for _ in 0..GRAPHQL_REPLACEMENTS {
+      for replacement in 0..GRAPHQL_REPLACEMENTS {
          let session_id = session.id;
          let retry = match &last {
             Err(Error::SessionRejected(_))
             | Err(Error::NotFound(_))
             | Err(Error::TransientUpstream) => true,
-            Err(Error::RateLimited) => {
+            Err(Error::RateLimited) if replacement < RATE_LIMIT_REPLACEMENTS => {
                self
                   .sessions
                   .has_unlimited(endpoint, retry_kind, session_id)
@@ -471,12 +486,6 @@ impl ApiClient {
          };
          if !retry {
             return last;
-         }
-         if matches!(
-            last,
-            Err(Error::NotFound(_)) | Err(Error::TransientUpstream)
-         ) {
-            sleep(TRANSIENT_RETRY_WAIT).await;
          }
 
          tracing::warn!(
@@ -549,7 +558,8 @@ impl ApiClient {
       }
    }
 
-   /// A search spends a `SearchTimeline` call and is never served from cache.
+   /// SearchTimeline is billed higher because first-page cache still misses on
+   /// a new query and each page spends the tight 50/15m search budget.
    fn cost_of(endpoint: &str) -> f64 {
       if endpoint.contains("SearchTimeline") {
          SEARCH_COST
@@ -613,7 +623,10 @@ impl ApiClient {
          )
          .await?;
 
-      let response = self.client.get_with_headers(&url, &headers).await?;
+      let response = self
+         .client
+         .get_on(&url, &headers, self.proxy_for(session).as_ref())
+         .await?;
       let (bytes, limit_recorded) = self.account_response(session, endpoint, response).await?;
 
       // Check for API errors before full deserialization.
@@ -682,6 +695,11 @@ impl ApiClient {
                session_user = %session.username,
                "API request failed: {status} - {body}"
             );
+            let body_trim = body.trim_start();
+            let ip_throttle = body_trim.is_empty() || body_trim.starts_with('<');
+            if ip_throttle {
+               return Err(Error::IpThrottled);
+            }
             if !limit_recorded {
                self
                   .sessions
@@ -900,7 +918,10 @@ impl ApiClient {
          headers.insert("x-client-transaction-id", value);
       }
 
-      let response = self.client.get_with_headers(url, &headers).await?;
+      let response = self
+         .client
+         .get_on(url, &headers, self.proxy_for(&session).as_ref())
+         .await?;
       let (bytes, _) = self
          .account_response(&session, session_key, response)
          .await?;

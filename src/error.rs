@@ -116,6 +116,11 @@ pub enum Error {
    #[error("Rate limited")]
    RateLimited,
 
+   /// Cloudflare/WAF 429 against this IP. Other cookie sessions share the
+   /// path, so retrying them only marks the whole pool as exhausted.
+   #[error("Upstream throttled this IP")]
+   IpThrottled,
+
    #[error("Session rejected: {0}")]
    SessionRejected(String),
 
@@ -202,7 +207,7 @@ impl Error {
                client_budget_message(),
             )
          },
-         Self::RateLimited => {
+         Self::RateLimited | Self::IpThrottled => {
             (
                StatusCode::TOO_MANY_REQUESTS,
                "Rate limited",

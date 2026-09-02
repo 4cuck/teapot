@@ -470,6 +470,16 @@ impl SessionPool {
       self.sessions.len()
    }
 
+   /// Session ids in load order, used to pin SOCKS5 exits.
+   #[must_use]
+   pub fn session_ids(&self) -> Vec<i64> {
+      self
+         .sessions
+         .iter()
+         .map(|slot| slot.credentials.id)
+         .collect()
+   }
+
    /// Check if pool is empty.
    pub const fn is_empty(&self) -> bool {
       self.sessions.is_empty()

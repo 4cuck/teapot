@@ -52,6 +52,40 @@ use crate::{
    },
 };
 
+async fn load_first_profile(state: &AppState, username: &str) -> Result<Profile> {
+   let cache_key = cache_keys::profile(username);
+   if let Some(cached) = helpers::swr_take(state, &cache_key, {
+      let username = username.to_owned();
+      move |state| async move {
+         let hint = helpers::user_hint(&state, &username);
+         if let Ok(profile) = state
+            .api
+            .get_profile_hinted(&username, None, hint.as_ref())
+            .await
+         {
+            helpers::store_profile(&state, &profile);
+         }
+      }
+   }) {
+      tracing::debug!("Cache hit for profile: {username}");
+      return Ok(cached);
+   }
+
+   let hint = helpers::user_hint(state, username);
+   let (profile_res, about) = tokio::join!(
+      state
+         .api
+         .get_profile_hinted(username, None, hint.as_ref()),
+      helpers::load_account_context(state, username),
+   );
+   let mut profile = profile_res?;
+   if let Some(context) = about {
+      helpers::apply_context_to_user(&mut profile.user, &context);
+   }
+   helpers::store_profile(state, &profile);
+   Ok(profile)
+}
+
 /// Reserved path names that cannot be usernames.
 const RESERVED_PATHS: &[&str] = &[
    "pic",
@@ -162,33 +196,26 @@ async fn user_timeline(
    // Extract prefs from cookies
    let prefs = Prefs::from_cookies(&jar, &state.config);
 
-   // Check cache first (only for initial page load without cursor)
-   let cache_key = cache_keys::profile(&username);
    let profile_result = if query.cursor.is_none() {
-      if let Some(cached) = state.cache.get::<Profile>(&cache_key) {
-         tracing::debug!("Cache hit for profile: {username}");
-         Ok(cached)
-      } else {
-         let result = state.api.get_profile(&username, None).await;
-         if let Ok(ref profile_data) = result {
-            state.cache.set(&cache_key, profile_data, ttl::DEFAULT);
-         }
-         result
-      }
+      load_first_profile(&state, &username).await
    } else {
+      let hint = helpers::user_hint(&state, &username);
       state
          .api
-         .get_profile(&username, query.cursor.as_deref())
+         .get_profile_hinted(&username, query.cursor.as_deref(), hint.as_ref())
          .await
    };
 
    match profile_result {
       Ok(mut profile_data) => {
-         helpers::apply_account_context(&state, &mut profile_data.user).await;
+         helpers::apply_cached_account_context(&state, &mut profile_data.user);
          // For AJAX scroll requests, return only the tweets HTML
          if is_scroll {
             let (mut tweets, cursor) = extract_timeline(profile_data.tweets);
             helpers::enrich_tweet_groups(&state, &mut tweets).await;
+            for group in &tweets {
+               helpers::remember_tweets(&state, group);
+            }
             let base_url = format!("/{}", profile_data.user.username);
             let content = timeline::render_timeline_with_prefs(
                &tweets,
@@ -221,6 +248,13 @@ async fn user_timeline(
             .cursor
             .is_some()
             .then(|| format!("/{}", profile_data.user.username));
+         for group in &profile_data.tweets.content {
+            helpers::remember_tweets(&state, group);
+         }
+         if let Some(first) = profile_data.tweets.content.first() {
+            helpers::prefetch_profiles(&state, first);
+         }
+
          let content = profile::render_profile_with_prefs(
             &profile_data,
             &state.config,
@@ -265,7 +299,24 @@ async fn user_tab_handler(
    let fetch_timeline = async {
       let cache_key = cache_keys::timeline(username, cache_kind);
       if cursor.is_none() {
-         if let Some(cached) = state.cache.get::<Timeline>(&cache_key) {
+         if let Some(cached) = helpers::swr_take::<Timeline, _, _>(state, &cache_key, {
+            let user_id = user.id.clone();
+            let cache_key = cache_key.clone();
+            move |state| async move {
+               let result = match tab {
+                  TimelineKind::Replies => {
+                     state.api.get_user_tweets_and_replies(&user_id, None).await
+                  },
+                  TimelineKind::Media => state.api.get_user_media(&user_id, None).await,
+                  _ => return,
+               };
+               if let Ok(data) = result {
+                  state
+                     .cache
+                     .set_swr(&cache_key, &data, ttl::DEFAULT, ttl::DEFAULT_STALE);
+               }
+            }
+         }) {
             return Ok(cached);
          }
          let result = match tab {
@@ -274,7 +325,9 @@ async fn user_tab_handler(
             _ => unreachable!(),
          };
          if let Ok(ref data) = result {
-            state.cache.set(&cache_key, data, ttl::DEFAULT);
+            state
+               .cache
+               .set_swr(&cache_key, data, ttl::DEFAULT, ttl::DEFAULT_STALE);
          }
          result
       } else {
@@ -304,6 +357,12 @@ async fn user_tab_handler(
       Ok(data) => {
          let (mut tweets, next_cursor) = extract_timeline(data);
          helpers::enrich_tweet_groups(state, &mut tweets).await;
+         for group in &tweets {
+            helpers::remember_tweets(state, group);
+         }
+         if let Some(first) = tweets.first() {
+            helpers::prefetch_profiles(state, first);
+         }
          let base_url = format!("/{username}/{tab_str}");
          let newer = has_request_cursor.then_some(base_url.as_str());
 

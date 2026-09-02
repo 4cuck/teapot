@@ -1,4 +1,7 @@
-use std::collections::BTreeMap;
+use std::{
+   collections::BTreeMap,
+   time::Duration,
+};
 
 use super::{
    AboutAccountData,
@@ -11,7 +14,6 @@ use super::{
    Conversation,
    ConversationData,
    Deserialize,
-   Duration,
    EditHistory,
    EditHistoryData,
    Error,
@@ -46,6 +48,22 @@ use super::{
    space_id_from_url,
    timeout,
 };
+
+fn profile_from_parts(user: User, tweets: Timeline, photo_rail: Vec<GalleryPhoto>) -> Profile {
+   let pinned = tweets
+      .content
+      .iter()
+      .flatten()
+      .find(|tweet| user.pinned_tweet > 0 && tweet.id == user.pinned_tweet)
+      .cloned();
+
+   Profile {
+      user,
+      photo_rail,
+      pinned,
+      tweets,
+   }
+}
 
 fn search_page_is_stuck(timeline: &Timeline) -> bool {
    let mut ids = timeline.content.iter().flatten().map(Tweet::original_id);
@@ -414,10 +432,69 @@ impl ApiClient {
 
    /// Get user's profile with tweets.
    pub async fn get_profile(&self, screen_name: &str, cursor: Option<&str>) -> Result<Profile> {
-      // First get user info
-      let user = self.get_user(screen_name).await?;
+      self.get_profile_hinted(screen_name, cursor, None).await
+   }
 
-      // Protected/suspended accounts don't expose tweets
+   /// Same as [`get_profile`], but a known user (or id stub) lets tweets and
+   /// the photo rail start in the same wave as `UserByScreenName`.
+   pub async fn get_profile_hinted(
+      &self,
+      screen_name: &str,
+      cursor: Option<&str>,
+      known: Option<&User>,
+   ) -> Result<Profile> {
+      let known_id = known
+         .map(|user| user.id.as_str())
+         .filter(|id| !id.is_empty());
+
+      if let Some(id) = known_id {
+         if cursor.is_none() {
+            let (user_res, tweets_res, rail_res) = tokio::join!(
+               self.get_user(screen_name),
+               self.get_user_tweets(id, None),
+               self.get_photo_rail(id)
+            );
+            let user = match user_res {
+               Ok(user) => user,
+               Err(err) => {
+                  known
+                     .filter(|user| !user.fullname.is_empty())
+                     .cloned()
+                     .ok_or(err)?
+               },
+            };
+            if user.protected || user.suspended {
+               return Ok(Profile {
+                  user,
+                  ..Profile::default()
+               });
+            }
+            return Ok(profile_from_parts(
+               user,
+               tweets_res?,
+               rail_res.unwrap_or_default(),
+            ));
+         }
+
+         let user = if let Some(user) = known.filter(|user| !user.fullname.is_empty()) {
+            user.clone()
+         } else {
+            self.get_user(screen_name).await?
+         };
+         if user.protected || user.suspended {
+            return Ok(Profile {
+               user,
+               ..Profile::default()
+            });
+         }
+         return Ok(profile_from_parts(
+            user,
+            self.get_user_tweets(id, cursor).await?,
+            Vec::new(),
+         ));
+      }
+
+      let user = self.get_user(screen_name).await?;
       if user.protected || user.suspended {
          return Ok(Profile {
             user,
@@ -425,34 +502,15 @@ impl ApiClient {
          });
       }
 
-      // Fetch tweets and photo rail in parallel (only for first page)
       let (tweets, photo_rail) = if cursor.is_none() {
-         let tweets_future = self.get_user_tweets(&user.id, None);
-         let photo_rail_future = self.get_photo_rail(&user.id);
-         let (tweets_result, photo_rail_result) = tokio::join!(tweets_future, photo_rail_future);
+         let (tweets_result, photo_rail_result) =
+            tokio::join!(self.get_user_tweets(&user.id, None), self.get_photo_rail(&user.id));
          (tweets_result?, photo_rail_result.unwrap_or_default())
       } else {
          (self.get_user_tweets(&user.id, cursor).await?, Vec::new())
       };
 
-      // Get pinned tweet if present
-      let pinned = if user.pinned_tweet > 0 {
-         tweets
-            .content
-            .iter()
-            .flatten()
-            .find(|tweet| tweet.id == user.pinned_tweet)
-            .cloned()
-      } else {
-         None
-      };
-
-      Ok(Profile {
-         user,
-         photo_rail,
-         pinned,
-         tweets,
-      })
+      Ok(profile_from_parts(user, tweets, photo_rail))
    }
 
    /// Search tweets.
@@ -713,7 +771,10 @@ impl ApiClient {
          headers.insert("x-client-transaction-id", val);
       }
 
-      let response = self.client.get_with_headers(&url, &headers).await?;
+      let response = self
+         .client
+         .get_on(&url, &headers, self.proxy_for(&session).as_ref())
+         .await?;
       let (bytes, _) = self
          .account_response(&session, endpoints::STRATO_TRANSLATE, response)
          .await?;

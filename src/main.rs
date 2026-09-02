@@ -48,6 +48,7 @@ use crate::{
    api::{
       ApiClient,
       HttpClient,
+      ProxyPool,
       SessionPool,
    },
    cache::Cache,
@@ -108,9 +109,13 @@ async fn main() -> eyre::Result<()> {
    let sessions_path =
       env::var("TEAPOT_SESSIONS_FILE").unwrap_or_else(|_| "sessions.jsonl".to_owned());
    let sessions = SessionPool::load(&sessions_path, config.config.max_concurrent_reqs).await?;
+   let mut proxies = ProxyPool::load(&config).await?;
+   if let Some(pool) = proxies.take() {
+      proxies = Some(pool.bind_sessions(&sessions.session_ids(), &config).await?);
+   }
 
    // Initialize API client
-   let api = ApiClient::new(&config, sessions);
+   let api = ApiClient::new(&config, sessions, proxies);
    api.spawn_filter_sync();
 
    // Initialize GIF transcoder if local mode

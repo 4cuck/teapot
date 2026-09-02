@@ -14,7 +14,7 @@ use crate::{
 };
 
 pub const STYLE_CSS: &str = "/css/style.css";
-pub const CLEAN_CSS: &str = "/css/clean.css?teapawt";
+pub const CLEAN_CSS: &str = "/css/clean.css?teapawt2";
 pub const FONTELLO_CSS: &str = "/css/fontello.css";
 
 /// Builder for rendering a full page layout.
@@ -240,7 +240,7 @@ impl<'a> PageLayout<'a> {
                   script src="/js/threadContext.js" defer="" {}
                   script src="/js/imageLightbox.js" defer="" {}
                   @if infinite_scroll {
-                      script src="/js/infiniteScroll.js" defer="" {}
+                      script src="/js/infiniteScroll.js?teapawt" defer="" {}
                   }
 
                   // Font preload

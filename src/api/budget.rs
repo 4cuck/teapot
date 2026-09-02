@@ -28,16 +28,16 @@ pub struct Tier {
 /// Widening horizons. The tightest tier decides.
 const TIERS: [Tier; 3] = [
    Tier {
+      refill_per_sec: 5.0,
+      capacity:       100.0,
+   },
+   Tier {
       refill_per_sec: 1.0,
-      capacity:       20.0,
+      capacity:       300.0,
    },
    Tier {
-      refill_per_sec: 0.2,
-      capacity:       60.0,
-   },
-   Tier {
-      refill_per_sec: 0.05,
-      capacity:       200.0,
+      refill_per_sec: 0.25,
+      capacity:       1000.0,
    },
 ];
 

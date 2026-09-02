@@ -138,6 +138,12 @@ pub struct AppConfig {
    pub proxy_auth:              String,
    #[serde(default, rename = "apiProxy")]
    pub api_proxy:               String,
+   /// `host:port:user:pass` SOCKS5 list used for X API calls.
+   #[serde(default, rename = "socksProxiesFile")]
+   pub socks_proxies_file:      String,
+   /// session id → SOCKS5 port pins so each account keeps the same exit IP.
+   #[serde(default, rename = "sessionProxiesFile")]
+   pub session_proxies_file:    String,
    #[serde(default, rename = "disableTid")]
    pub disable_tid:             bool,
    /// Read about-account data from X-Posed's public cache before asking X.

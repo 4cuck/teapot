@@ -1,0 +1,5 @@
+# SOCKS5 endpoints for X API calls. One `host:port:user:pass` per line.
+# Copy to proxies.txt and point socksProxiesFile at it. Never commit the copy.
+#
+# socks.example.com:1080:username:password
+# socks.example.com:1081:username:password

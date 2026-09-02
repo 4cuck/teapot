@@ -607,6 +607,11 @@ async fn user_by_id(State(state): State<AppState>, Path(id): Path<String>) -> Re
          state
             .cache
             .set(&cache_key, &user.username, ttl::USER_ID_MAPPING);
+         state.cache.set(
+            &cache_keys::username_id(&user.username),
+            &user.id,
+            ttl::USER_ID_MAPPING,
+         );
          Ok(Redirect::to(&format!("/{}", user.username)).into_response())
       },
       Err(Error::UserNotFound(msg)) => {

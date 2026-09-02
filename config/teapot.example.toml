@@ -7,6 +7,10 @@ hostname           = "localhost"
 httpMaxConnections = 100
 https              = false       # Set to true when using HTTPS
 port               = 8080
+# Port used in generated links (prefs bookmark, RSS, og:image, …).
+# Leave unset to use `port`. Set to 443 (HTTPS) or 80 (HTTP) when teapot
+# sits behind a reverse proxy so URLs omit the listen port.
+# publicPort         = 443
 staticDir          = "./public"
 title              = "teapawt"
 
@@ -50,12 +54,19 @@ enableDebug = false
 # Generate a unique value with at least 32 characters.
 debugToken = ""
 
-# HTTP/HTTPS proxy (SOCKS proxies not supported)
+# HTTP/HTTPS proxy for media fetches. X API calls use socksProxiesFile when set.
 proxy     = ""
 proxyAuth = ""
 
 # HTTP/HTTPS proxy URL used only for X API requests, e.g. http://localhost:7000
+# Ignored when socksProxiesFile is set.
 apiProxy = ""
+
+# SOCKS5 list (`host:port:user:pass`, one per line). Each cookie session is
+# pinned to one port so its exit IP stays stable. Pins are stored in
+# sessionProxiesFile.
+socksProxiesFile   = ""
+sessionProxiesFile = "session-proxies.json"
 
 # Enable this if cookie-based auth is failing
 disableTid = false

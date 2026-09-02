@@ -111,6 +111,12 @@ main .container {
   display: block;
 }
 
+/* The nitter search bar sits up into the old banner. Error pages have
+   no banner, so that pull-up hid the message under the fixed nav. */
+.error-panel {
+  margin-top: 0;
+}
+
 .timeline-container {
   width: min(100%, var(--feed-width));
   max-width: var(--feed-width);

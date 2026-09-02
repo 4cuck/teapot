@@ -22,8 +22,7 @@
   background: var(--tp-error-container);
   color: var(--tp-on-error-container);
   box-shadow: var(--elevation-1);
-  margin: auto;
-  margin-top: -50px;
+  margin: 0 auto;
   text-align: center;
   font-weight: 500;
 }

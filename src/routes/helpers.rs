@@ -1,7 +1,10 @@
 use std::{
+   any::Any,
    collections::BTreeMap,
+   future::Future,
    iter,
    slice,
+   sync::LazyLock,
 };
 
 use axum::{
@@ -16,9 +19,12 @@ use axum::{
    },
 };
 
+use tokio::sync::Semaphore;
+
 use crate::{
    AppState,
    cache::{
+      Hit,
       keys as cache_keys,
       ttl,
    },
@@ -30,6 +36,7 @@ use crate::{
    types::{
       AccountContext,
       Conversation,
+      Profile,
       Timeline,
       Translation,
       Tweet,
@@ -39,56 +46,207 @@ use crate::{
    views::layout,
 };
 
+/// Caps background profile prefetches so they cannot crowd out live pages.
+static PROFILE_PREFETCH: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(3));
+const PREFETCH_PROFILES: usize = 4;
+
 #[derive(Clone)]
 struct CachedRss {
    body:   String,
    min_id: Option<i64>,
 }
 
+/// Fresh cache hit, or a stale value plus a single background refresh.
+pub fn swr_take<T, F, Fut>(state: &AppState, key: &str, refresh: F) -> Option<T>
+where
+   T: Any + Clone + Send + Sync,
+   F: FnOnce(AppState) -> Fut + Send + 'static,
+   Fut: Future<Output = ()> + Send + 'static,
+{
+   match state.cache.lookup(key) {
+      Some(Hit::Fresh(value)) => Some(value),
+      Some(Hit::Stale(value)) => {
+         if let Some(guard) = state.cache.start_refresh(key) {
+            let state = state.clone();
+            tokio::spawn(async move {
+               let _guard = guard;
+               refresh(state).await;
+            });
+         }
+         Some(value)
+      },
+      None => None,
+   }
+}
+
+/// Cached user, or a stub that only has `id` so tweets can start immediately.
+pub fn user_hint(state: &AppState, username: &str) -> Option<User> {
+   let key = cache_keys::user(username);
+   if let Some(Hit::Fresh(user) | Hit::Stale(user)) = state.cache.lookup(&key) {
+      return Some(user);
+   }
+   let id = state.cache.get::<String>(&cache_keys::username_id(username))?;
+   Some(User {
+      id,
+      username: username.to_owned(),
+      ..User::default()
+   })
+}
+
+/// Persist the bidirectional id mapping. Does not overwrite a full user card.
+pub fn remember_user_id(state: &AppState, user: &User) {
+   if user.id.is_empty() || user.username.is_empty() {
+      return;
+   }
+   state
+      .cache
+      .set(&cache_keys::user_id(&user.id), &user.username, ttl::USER_ID_MAPPING);
+   state.cache.set(
+      &cache_keys::username_id(&user.username),
+      &user.id,
+      ttl::USER_ID_MAPPING,
+   );
+}
+
+/// Store a full user record plus id mappings.
+pub fn store_user(state: &AppState, user: &User) {
+   remember_user_id(state, user);
+   if user.id.is_empty() || user.username.is_empty() {
+      return;
+   }
+   state
+      .cache
+      .set_swr(&cache_keys::user(&user.username), user, ttl::DEFAULT, ttl::DEFAULT_STALE);
+}
+
+/// Store a first-page profile and its user.
+pub fn store_profile(state: &AppState, profile: &Profile) {
+   store_user(state, &profile.user);
+   state.cache.set_swr(
+      &cache_keys::profile(&profile.user.username),
+      profile,
+      ttl::DEFAULT,
+      ttl::DEFAULT_STALE,
+   );
+}
+
+/// Seed id mappings from tweets already on the page so a later profile click
+/// can fetch tweets in the same wave as `UserByScreenName`.
+pub fn remember_tweets(state: &AppState, tweets: &[Tweet]) {
+   for tweet in tweets {
+      for user in tweet_users(tweet) {
+         remember_user_id(state, user);
+      }
+   }
+}
+
+/// Warm a few uncached profiles in the background after search/timeline HTML.
+pub fn prefetch_profiles(state: &AppState, tweets: &[Tweet]) {
+   let mut names = Vec::new();
+   for tweet in tweets {
+      let name = tweet.user.username.to_lowercase();
+      if name.is_empty() || names.iter().any(|seen: &String| seen == &name) {
+         continue;
+      }
+      if state.cache.get::<Profile>(&cache_keys::profile(&name)).is_some() {
+         continue;
+      }
+      names.push(name);
+      if names.len() >= PREFETCH_PROFILES {
+         break;
+      }
+   }
+   if names.is_empty() {
+      return;
+   }
+
+   let state = state.clone();
+   tokio::spawn(async move {
+      for name in names {
+         let Ok(permit) = PROFILE_PREFETCH.try_acquire() else {
+            break;
+         };
+         let hint = user_hint(&state, &name);
+         if let Ok(profile) = state.api.get_profile_hinted(&name, None, hint.as_ref()).await {
+            store_profile(&state, &profile);
+         }
+         drop(permit);
+      }
+   });
+}
+
 /// Fetch a user, using cache when available.
 pub async fn get_cached_user(state: &AppState, username: &str) -> Result<User> {
    let cache_key = cache_keys::user(username);
-   if let Some(cached) = state.cache.get::<User>(&cache_key) {
+   if let Some(cached) = swr_take(state, &cache_key, {
+      let username = username.to_owned();
+      move |state| async move {
+         if let Ok(user) = state.api.get_user(&username).await {
+            store_user(&state, &user);
+         }
+      }
+   }) {
       return Ok(cached);
    }
    let fetched = state.api.get_user(username).await?;
-   state.cache.set(&cache_key, &fetched, ttl::DEFAULT);
+   store_user(state, &fetched);
    Ok(fetched)
 }
 
-/// Decorate one user in place, spending an `AboutAccountQuery` only when both
-/// caches miss.
-pub async fn apply_account_context(state: &AppState, user: &mut User) {
+pub fn apply_context_to_user(user: &mut User, context: &AccountContext) {
+   user.account_based_in.clone_from(&context.account_based_in);
+   user.connection_source.clone_from(&context.connection_source);
+   user.location_accurate = context.location_accurate;
+}
+
+/// Apply About Account from cache only. A miss is filled in the background.
+pub fn apply_cached_account_context(state: &AppState, user: &mut User) {
    let username = user.username.to_lowercase();
    if username.is_empty() {
       return;
    }
    let key = cache_keys::account_context(&username);
-
-   let context = if let Some(cached) = state.cache.get::<AccountContext>(&key) {
-      cached
-   } else {
-      let community = community_contexts(state, slice::from_ref(&username)).await;
-      let resolved = match community.into_values().next() {
-         Some(context) => context,
-         None => {
-            state
-               .api
-               .get_account_context(&username)
-               .await
-               .unwrap_or_else(|err| {
-                  tracing::debug!(username, "About Account unavailable: {err}");
-                  AccountContext::default()
-               })
-         },
-      };
-      state.cache.set(&key, &resolved, ttl::ACCOUNT_CONTEXT);
-      resolved
+   if let Some(context) = state.cache.get::<AccountContext>(&key) {
+      apply_context_to_user(user, &context);
+      return;
+   }
+   let Some(guard) = state.cache.start_refresh(&key) else {
+      return;
    };
+   let state = state.clone();
+   tokio::spawn(async move {
+      let _guard = guard;
+      let _ = load_account_context(&state, &username).await;
+   });
+}
 
-   user.account_based_in = context.account_based_in;
-   user.connection_source = context.connection_source;
-   user.location_accurate = context.location_accurate;
+/// Load About Account, overlapping community cache and X when needed.
+pub async fn load_account_context(state: &AppState, username: &str) -> Option<AccountContext> {
+   let username = username.to_lowercase();
+   if username.is_empty() {
+      return None;
+   }
+   let key = cache_keys::account_context(&username);
+   if let Some(cached) = state.cache.get::<AccountContext>(&key) {
+      return (!cached.is_empty()).then_some(cached);
+   }
+
+   let community = community_contexts(state, slice::from_ref(&username)).await;
+   let resolved = match community.into_values().next() {
+      Some(context) => context,
+      None => {
+         state
+            .api
+            .get_account_context(&username)
+            .await
+            .unwrap_or_else(|err| {
+               tracing::debug!(username, "About Account unavailable: {err}");
+               AccountContext::default()
+            })
+      },
+   };
+   state.cache.set(&key, &resolved, ttl::ACCOUNT_CONTEXT);
+   (!resolved.is_empty()).then_some(resolved)
 }
 
 /// Resolve about-account data for many users at once without spending X
@@ -347,7 +505,9 @@ pub fn api_error(config: &Config, err: &Error) -> Response {
 pub fn api_error_titled(config: &Config, err: &Error, generic: &str) -> Response {
    let (status, title, message) = classify_error(err, generic);
 
-   if status.is_server_error() {
+   if matches!(err, Error::TransientUpstream) {
+      tracing::warn!(error = ?err, "upstream empty");
+   } else if status.is_server_error() {
       tracing::error!(error = ?err, "request failed");
    } else if status == StatusCode::TOO_MANY_REQUESTS {
       tracing::debug!(error = ?err, "request refused");

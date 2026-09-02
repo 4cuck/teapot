@@ -43,6 +43,11 @@ pub fn user_id(id: &str) -> String {
    format!("uid:{id}")
 }
 
+/// Username to user ID mapping, so a later profile can start tweets immediately.
+pub fn username_id(username: &str) -> String {
+   format!("unid:{}", username.to_lowercase())
+}
+
 pub fn rss_user(username: &str) -> String {
    rss(&format!("user:{}", username.to_lowercase()))
 }
@@ -57,6 +62,19 @@ pub fn rss_media(username: &str) -> String {
 
 pub fn rss_search(query: &str) -> String {
    rss(&format!("search:{}", query.to_lowercase()))
+}
+
+pub fn search_timeline(query: &str, product: &str, cursor: Option<&str>) -> String {
+   format!(
+      "search:{}:{}:{}",
+      query.to_lowercase(),
+      product,
+      cursor.unwrap_or("")
+   )
+}
+
+pub fn search_users(query: &str, cursor: Option<&str>) -> String {
+   format!("search-users:{}:{}", query.to_lowercase(), cursor.unwrap_or(""))
 }
 
 pub fn rss_user_search(username: &str, query: &str) -> String {
