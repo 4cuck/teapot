@@ -326,18 +326,27 @@ main .container {
 }
 
 .tab {
-  position: sticky;
-  top: 56px;
-  z-index: 20;
-  margin: 0 0 12px;
-  background: color-mix(in srgb, var(--bg_color) 94%, transparent);
-  backdrop-filter: blur(10px);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  overflow: hidden;
+  position: static;
+  top: auto;
+  z-index: auto;
+  margin: 0 0 4px;
+  background: var(--bg_panel);
+  backdrop-filter: none;
+  border: 0;
+  border-radius: 0;
+  overflow: visible;
+  box-shadow: none;
 }
-.tab-item a { padding: 11px 12px 9px; font-size: 13px; }
-.tab-item a.active, .tab-item.active a { border-bottom-color: var(--accent); color: var(--text); }
+.tab-item a {
+  padding: 8px 0;
+  font-size: inherit;
+  font-weight: bold;
+  color: var(--tab);
+}
+.tab-item a.active, .tab-item.active a {
+  border-bottom-color: var(--tab_selected);
+  color: var(--tab_selected);
+}
 
 /* Profile tabs sit directly above a bordered feed. A translucent rounded
    frame lets the feed's side rails show through while scrolling, producing
@@ -345,22 +354,26 @@ main .container {
 .profile-tabs .tab {
   isolation: isolate;
   border: 0;
-  border-bottom: 1px solid var(--line);
   border-radius: 0;
-  background: var(--bg_color);
+  background: var(--bg_panel);
   backdrop-filter: none;
-  box-shadow: 0 -10px 0 10px var(--bg_color), 0 8px 12px -12px var(--shadow_dark);
+  box-shadow: none;
 }
 
-.timeline-header { margin-bottom: 12px; text-align: left; }
+.timeline-header {
+  margin-bottom: 4px;
+  text-align: center;
+  background-color: var(--bg_panel);
+}
 .timeline-none, .timeline-protected, .timeline-end {
   margin: 0;
-  padding: 28px 20px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--muted);
-  font-size: 15px;
+  padding: 8px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 20px;
+  font-weight: 600;
   box-shadow: none;
 }
 .timeline-footer { padding: 0; margin-top: 12px; background: transparent; }
@@ -655,10 +668,34 @@ input[type="text"], input[type="date"], input[type="number"], select {
   color: var(--text);
   box-shadow: none;
 }
-.search-field { gap: 8px; }
-.search-field input[type="text"], .search-field input[type="number"] { height: 40px; background: var(--bg_color); border-color: var(--line); }
-.search-field button { height: 40px; box-shadow: none; }
-.search-field > label { min-height: 40px; padding: 9px 14px; border-radius: 6px; background: var(--surface); }
+.search-field { gap: 0; }
+.search-field input[type="text"],
+.search-field input[type="number"] {
+  height: calc(100% - 4px);
+  min-height: 0;
+  padding: 2px 4px;
+  background: var(--bg_elements);
+  border-color: var(--accent_border);
+  border-radius: 0;
+  box-shadow: none;
+}
+.search-field input[type="text"]:focus,
+.search-field input[type="number"]:focus {
+  box-shadow: none;
+}
+.search-field button {
+  height: 23px;
+  min-height: 23px;
+  padding: 0 4px;
+  border-radius: 0;
+  box-shadow: none;
+}
+.search-field > label {
+  min-height: 0;
+  padding: 1px 4px;
+  border-radius: 0;
+  background: var(--bg_elements);
+}
 /* .search-panel { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); } */
 .search-field #search-panel-toggle:checked ~ .search-panel {
   max-height: 2000px !important;
@@ -666,63 +703,53 @@ input[type="text"], input[type="date"], input[type="number"], select {
 }
 .search-toggles { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 4px 12px; }
 
-.search-results > .timeline-header { padding: 0; margin: 0 0 12px; }
+.search-results > .timeline-header { padding: 8px; margin: 0 0 4px; }
 .search-results > .timeline-header .search-field {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 42px 42px;
-  gap: 8px;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--surface);
+  display: flex;
+  flex-wrap: wrap;
+  grid-template-columns: none;
+  gap: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
-.search-results > .timeline-header .user-search-field { grid-template-columns: minmax(0, 1fr) 42px; }
+.search-results > .timeline-header .user-search-field { grid-template-columns: none; }
 .search-results .search-field > .pref-input { padding: 0; }
 .search-results .search-field input[type="text"] {
-  height: 42px;
-  padding: 0 12px;
-  border: 0;
-  background: transparent;
+  height: calc(100% - 4px);
+  padding: 2px 4px;
+  border: 1px solid var(--accent_border);
+  background: var(--bg_elements);
 }
 .search-results .search-field input[type="text"]:focus { box-shadow: none; }
 .search-results .search-field button {
-  width: 42px;
-  height: 42px;
-  min-height: 42px;
-  padding: 0;
+  width: auto;
+  height: 23px;
+  min-height: 23px;
+  padding: 0 4px;
   border: 0;
-  border-radius: 8px;
-  background: var(--accent);
-  color: var(--icon_text);
+  border-radius: 0;
   box-shadow: none;
 }
-.search-results .search-field button:hover { background: var(--accent_light); }
 .search-results .search-field > label {
-  width: 42px;
-  height: 42px;
-  min-height: 42px;
-  padding: 0;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  padding: 1px 4px;
   justify-content: center;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--bg_color);
+  border: 1px solid var(--accent_border);
+  border-radius: 0;
+  background: var(--bg_elements);
 }
-.search-results .tab { margin-bottom: 12px; }
 .search-results .tab {
-  top: 64px;
-  background: var(--bg_color);
+  top: auto;
+  margin-bottom: 4px;
+  background: var(--bg_panel);
   backdrop-filter: none;
-  box-shadow: 0 -8px 0 var(--bg_color);
+  box-shadow: none;
 }
 .search-results > .timeline { border: 0; background: transparent; }
-.search-results .search-empty {
-  padding: 44px 20px;
-  border: 0;
-  color: var(--muted);
-  text-align: center;
-  font-size: 14px;
-  font-weight: 600;
-}
 
 .search-results .search-panel {
   grid-column: 1 / -1;
@@ -887,8 +914,10 @@ input[type="text"], input[type="date"], input[type="number"], select {
   .profile-banner, .profile-card, .photo-rail-card, .tab, .timeline, .timeline-none, .timeline-protected, .timeline-end, .preferences-panel { border-left: 0; border-right: 0; border-radius: 0; }
   .profile-banner + .profile-card { border-radius: 0; }
   .timeline-item { padding: 14px 12px; }
-  .tab { top: 56px; margin-left: 0; margin-right: 0; }
-  .timeline-header { padding: 0 12px; }
+  .timeline.media-grid-view .timeline-item,
+  .timeline.media-gallery-view .timeline-item { padding: 0; }
+  .tab { top: auto; margin-left: 0; margin-right: 0; }
+  .timeline-header { padding: 8px; }
   .search-panel { border-radius: 0; }
   .preferences-panel { max-width: none; margin: 0; }
   .landing-page { min-height: calc(100vh - 100px); padding: 70px 20px 48px; }
@@ -948,7 +977,7 @@ input[type="text"], input[type="date"], input[type="number"], select {
 
 /* A connector anchored to the avatars communicates author → reply without
    becoming a second scrollbar. */
-.thread-line .timeline-item.thread:not(.thread-last)::after {
+.thread-line .timeline-item.thread:not(.thread-last):not(.more-replies-thread)::after {
   content: "";
   position: absolute;
   z-index: 2;
@@ -959,6 +988,11 @@ input[type="text"], input[type="date"], input[type="number"], select {
   border-radius: 2px;
   background: linear-gradient(var(--accent), color-mix(in srgb, var(--accent) 35%, var(--line)));
   pointer-events: none;
+}
+
+.thread-line .timeline-item.thread:not(.thread-last):not(.more-replies-thread):has(+ .more-replies-thread)::after {
+  /* Reach the stacked dots in the stub instead of dying at the tweet border. */
+  bottom: -8px;
 }
 
 .thread-line .timeline-item.thread .tweet-avatar img {
@@ -991,24 +1025,70 @@ input[type="text"], input[type="date"], input[type="number"], select {
   vertical-align: middle;
 }
 
-.thread-line .more-replies-thread {
-  min-height: 38px;
-  padding: 4px 14px 4px 58px;
-  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+.timeline > .thread-line > .timeline-item + .more-replies-thread,
+.timeline > .thread-line > .more-replies-thread + .timeline-item {
+  border-top: 0;
 }
 
-.thread-line .more-replies-thread .more-replies-text {
+.thread-line .timeline-item.thread.more-replies-thread {
+  min-height: 0;
+  padding: 0 14px 8px 18px;
+  background: transparent;
+}
+
+.thread-line .timeline-item.thread.more-replies-thread::before,
+.thread-line .timeline-item.thread.more-replies-thread::after {
+  content: none;
+  display: none;
+}
+
+.thread-line .timeline-item.thread.more-replies-thread .more-replies {
+  position: relative;
+  display: block;
   margin: 0;
-  padding: 7px 0;
+  padding: 4px 0 2px;
+}
+
+/* Stacked continuation dots on the 40px avatar axis. Kept out of flex so
+   "..." cannot render as a horizontal ellipsis beside the label. */
+.thread-line .timeline-item.thread.more-replies-thread .more-replies::before {
+  content: "·\A·\A·";
+  white-space: pre;
+  display: block;
+  position: absolute;
+  top: 6px;
+  left: 22px;
+  width: 8px;
+  margin: 0 0 0 -4px;
+  padding: 0;
+  overflow: visible;
+  background: unset;
+  color: var(--more_replies_dots);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 0.42;
+  text-align: center;
+  pointer-events: none;
+}
+
+.thread-line .timeline-item.thread.more-replies-thread .more-replies-text {
+  display: inline-block;
+  margin: 0 0 0 40px;
+  padding: 6px 0;
   color: var(--accent);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 650;
 }
 
-.thread-line .more-replies-thread .more-replies-text::before {
-  content: "···";
-  margin-right: 8px;
-  letter-spacing: 2px;
+.thread-line .timeline-item.thread.more-replies-thread .more-replies-text::before {
+  content: none;
+  display: none;
+}
+
+.thread-line .timeline-item.thread.more-replies-thread .more-replies-text:hover {
+  text-decoration: none;
+  color: var(--accent_light, var(--accent));
 }
 
 .conversation { width: min(100%, var(--feed-width)); max-width: var(--feed-width); }
@@ -1237,9 +1317,202 @@ input[type="text"], input[type="date"], input[type="number"], select {
   .thread-context-bar { top: 64px; }
   .thread-context-link { margin: 0 8px; }
   .thread-line .timeline-item.thread { padding-left: 12px; }
-  .thread-line .timeline-item.thread:not(.thread-last)::after { left: 34px; }
+  .thread-line .timeline-item.thread:not(.thread-last):not(.more-replies-thread)::after { left: 34px; }
+  .thread-line .timeline-item.thread.more-replies-thread { padding-left: 12px; }
+  .thread-line .timeline-item.thread.more-replies-thread .more-replies::before { left: 22px; }
   .reply.thread-line > .more-replies,
   .after-tweet.thread-line > .more-replies { padding-left: 62px !important; }
   .reply.thread-line > .more-replies::before,
   .after-tweet.thread-line > .more-replies::before { left: 34px; }
+}
+
+/* Nitter media views — last so teapawt tweet chrome does not leak into grid/gallery */
+.profile-tabs.media-only {
+  display: block;
+  width: 100%;
+  max-width: none;
+}
+.profile-tabs.media-only .timeline-container,
+.timeline-container.media-only {
+  width: 100%;
+  max-width: none;
+}
+.timeline.media-grid-view,
+.timeline.media-gallery-view {
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  animation: none;
+}
+.timeline.media-grid-view {
+  display: grid !important;
+  gap: 4px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.timeline.media-gallery-view { display: block !important; }
+.timeline.media-grid-view .timeline-item,
+.timeline.media-gallery-view .timeline-item {
+  padding: 0;
+  background: transparent;
+}
+.timeline.media-grid-view .timeline-item {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  aspect-ratio: 1 / 1;
+}
+.timeline.media-grid-view .timeline-item:hover { background: transparent; opacity: 0.85; }
+.timeline.media-gallery-view .timeline-item:hover { background: transparent; }
+.timeline.media-grid-view > div:not(:first-child),
+.timeline.media-gallery-view > div:not(:first-child) { border-top: 0; }
+
+.timeline.media-grid-view .tweet-header,
+.timeline.media-grid-view .replying-to,
+.timeline.media-grid-view .retweet-header,
+.timeline.media-grid-view .pinned,
+.timeline.media-grid-view .tweet-stats,
+.timeline.media-grid-view .attribution,
+.timeline.media-grid-view .poll,
+.timeline.media-grid-view .quote,
+.timeline.media-grid-view .community-note,
+.timeline.media-grid-view .media-tag-block,
+.timeline.media-grid-view .tweet-content,
+.timeline.media-grid-view .card-content,
+.timeline.media-grid-view .card-content-container,
+.timeline.media-grid-view .translate-btn,
+.timeline.media-grid-view .disclosure-label,
+.timeline.media-grid-view .tweet-account-trigger,
+.timeline.media-grid-view .show-thread,
+.timeline.media-gallery-view .gallery-masonry.compact .tweet-header,
+.timeline.media-gallery-view .gallery-masonry.compact .replying-to,
+.timeline.media-gallery-view .gallery-masonry.compact .retweet-header,
+.timeline.media-gallery-view .gallery-masonry.compact .pinned,
+.timeline.media-gallery-view .gallery-masonry.compact .tweet-stats,
+.timeline.media-gallery-view .gallery-masonry.compact .attribution,
+.timeline.media-gallery-view .gallery-masonry.compact .poll,
+.timeline.media-gallery-view .gallery-masonry.compact .quote,
+.timeline.media-gallery-view .gallery-masonry.compact .community-note,
+.timeline.media-gallery-view .gallery-masonry.compact .media-tag-block,
+.timeline.media-gallery-view .gallery-masonry.compact .tweet-content,
+.timeline.media-gallery-view .gallery-masonry.compact .card-content,
+.timeline.media-gallery-view .gallery-masonry.compact .card-content-container,
+.timeline.media-gallery-view .gallery-masonry.compact .translate-btn,
+.timeline.media-gallery-view .gallery-masonry.compact .disclosure-label,
+.timeline.media-gallery-view .gallery-masonry.compact .tweet-account-trigger,
+.timeline.media-gallery-view .gallery-masonry.compact .show-thread {
+  display: none !important;
+}
+
+.timeline.media-grid-view .tweet-body {
+  margin-left: 0 !important;
+  padding: 0;
+  flex: none;
+  width: 100%;
+  height: 100%;
+  aspect-ratio: 1 / 1;
+}
+.timeline.media-gallery-view .tweet-body {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  margin-left: 0 !important;
+  padding: 10px;
+}
+.timeline.media-gallery-view .gallery-masonry {
+  margin: 10px 0;
+  column-gap: 10px;
+  column-width: clamp(190px, 22vw, 350px);
+}
+.timeline.media-gallery-view .gallery-masonry[data-col-size="small"] {
+  column-width: max(130px, 11vw);
+}
+.timeline.media-gallery-view .gallery-masonry[data-col-size="large"] {
+  column-width: clamp(350px, 22vw, 480px);
+}
+.timeline.media-gallery-view .gallery-masonry.masonry-active {
+  column-width: unset;
+  column-gap: unset;
+  position: relative;
+}
+.timeline.media-gallery-view .gallery-masonry.masonry-active .timeline-item {
+  animation: none;
+  position: absolute;
+  box-sizing: border-box;
+  margin-bottom: 0;
+}
+.timeline.media-gallery-view .gallery-masonry .timeline-item {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  margin-bottom: 10px;
+  break-inside: avoid;
+  padding: 0;
+}
+.timeline.media-gallery-view .gallery-masonry.compact .tweet-body { padding: 0; }
+.timeline.media-gallery-view .gallery-masonry.compact .tweet-body > .attachments { margin: 0; }
+.timeline.media-gallery-view .tweet-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 0.75em;
+  margin-bottom: 0;
+}
+.timeline.media-gallery-view .tweet-header .tweet-name-row { flex: 1; }
+.timeline.media-gallery-view .tweet-header .fullname-and-username { flex-wrap: wrap; }
+.timeline.media-gallery-view .tweet-header .username {
+  display: block;
+  flex-basis: 100%;
+  margin-left: 0;
+}
+.timeline.media-gallery-view .tweet-content { margin: 3px 0; }
+.timeline.media-gallery-view .tweet-body > .attachments {
+  align-self: stretch;
+  border-radius: 0;
+  margin: -10px -10px 10px;
+  max-height: none;
+  max-width: none;
+  order: -1;
+  width: auto;
+  background-color: var(--bg_elements);
+}
+.timeline.media-gallery-view .tweet-body > .attachments .gallery-row,
+.timeline.media-gallery-view .tweet-body > .attachments .still-image,
+.timeline.media-gallery-view .tweet-body > .attachments .still-image img,
+.timeline.media-gallery-view .tweet-body > .attachments .attachment > video,
+.timeline.media-gallery-view .tweet-body > .attachments .attachment > img {
+  max-height: none;
+  max-width: none;
+  width: 100%;
+}
+.timeline.media-gallery-view .tweet-avatar {
+  display: block !important;
+}
+.timeline.media-gallery-view .tweet-header .tweet-avatar img {
+  float: none;
+  margin: 0;
+  width: 42px;
+  height: 42px;
+}
+.timeline.media-grid-view .attachments,
+.timeline.media-grid-view .gallery-row,
+.timeline.media-grid-view .still-image,
+.timeline.media-grid-view .still-image img,
+.timeline.media-grid-view .attachment,
+.timeline.media-grid-view .attachment > video,
+.timeline.media-grid-view .attachment > img {
+  max-width: none;
+  max-height: none;
+  width: 100%;
+  height: 100%;
+}
+.timeline.media-grid-view .attachments {
+  display: flex;
+  flex-flow: column;
+  margin: 0;
+  border-radius: 0;
+}
+.timeline.media-grid-view .still-image img {
+  object-fit: cover;
+  flex-basis: auto;
 }

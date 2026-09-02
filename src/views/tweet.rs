@@ -28,6 +28,7 @@ use crate::{
       button_referer,
       gen_img,
       get_avatar_class,
+      get_medium_pic,
       get_small_pic,
       icon,
       link_user,
@@ -88,6 +89,7 @@ pub struct TweetRenderer<'a> {
    extra_class: &'a str,
    index:       usize,
    sort_toggle: Option<&'a Markup>,
+   big_thumb:   bool,
 }
 
 impl<'a> TweetRenderer<'a> {
@@ -102,7 +104,13 @@ impl<'a> TweetRenderer<'a> {
          extra_class: "",
          index: 0,
          sort_toggle: None,
+         big_thumb: false,
       }
+   }
+
+   pub const fn big_thumb(mut self, big_thumb: bool) -> Self {
+      self.big_thumb = big_thumb;
+      self
    }
 
    pub const fn pinned(mut self, pinned: bool) -> Self {
@@ -153,6 +161,7 @@ impl<'a> TweetRenderer<'a> {
       let thread_ctx = self.thread_ctx;
       let extra_class = self.extra_class;
       let index = self.index;
+      let big_thumb = self.big_thumb;
 
       // Use <a> to make unavailable tombstoned tweets clickable
       if !tweet.available {
@@ -325,21 +334,25 @@ impl<'a> TweetRenderer<'a> {
 
                   // Media (photos)
                   @if !display_tweet.photos.is_empty() {
-                      (render_photos(&display_tweet.photos, config))
+                      (render_photos(&display_tweet.photos, config, big_thumb))
                   }
 
                   // Video
                   @if let Some(ref video) = display_tweet.video {
-                      (render_video(video, config, prefs))
+                      (render_video(video, config, prefs, big_thumb))
                   }
                   @for video in &display_tweet.additional_videos {
-                      (render_video(video, config, prefs))
+                      (render_video(video, config, prefs, big_thumb))
                   }
 
                   // GIF
                   @if let Some(ref gif) = display_tweet.gif {
                       @let autoplay_gifs = prefs.is_none_or(|pref| pref.autoplay_gifs);
-                      @let poster = get_small_pic(&gif.thumb, config);
+                      @let poster = if big_thumb {
+                          get_medium_pic(&gif.thumb, config)
+                      } else {
+                          get_small_pic(&gif.thumb, config)
+                      };
                       @let gif_src = formatters::get_vid_url(&gif.url, &config.config.hmac_key, config.config.base64_media);
                       div class="attachments media-gif" {
                           div class="gallery-gif" style="max-height: unset" {
@@ -423,7 +436,7 @@ impl<'a> TweetRenderer<'a> {
 /// Photos are grouped into rows:
 /// - 1-2 photos: single row
 /// - 3+ photos: distributed into 2 rows (e.g. 3 → [2, 1], 4 → [2, 2])
-fn render_photos(photos: &[Photo], config: &Config) -> Markup {
+fn render_photos(photos: &[Photo], config: &Config, big_thumb: bool) -> Markup {
    let groups: Vec<&[Photo]> = if photos.len() < 3 {
       vec![photos]
    } else {
@@ -441,6 +454,8 @@ fn render_photos(photos: &[Photo], config: &Config) -> Markup {
                        @let named = photo.url.contains("name=");
                        @let small = if named {
                            formatters::get_pic_url(&photo.url, config.config.base64_media)
+                       } else if big_thumb {
+                           get_medium_pic(&photo.url, config)
                        } else {
                            get_small_pic(&photo.url, config)
                        };
@@ -579,13 +594,13 @@ fn render_quote(quote: &Tweet, config: &Config, prefs: Option<&Prefs>) -> Markup
 
            // Media
            @if !quote.photos.is_empty() {
-               (render_photos(&quote.photos, config))
+               (render_photos(&quote.photos, config, false))
            }
            @if let Some(ref video) = quote.video {
-               (render_video(video, config, prefs))
+               (render_video(video, config, prefs, false))
            }
            @for video in &quote.additional_videos {
-               (render_video(video, config, prefs))
+               (render_video(video, config, prefs, false))
            }
            @if let Some(ref gif) = quote.gif {
                @let gif_url = formatters::get_vid_url(&gif.url, &config.config.hmac_key, config.config.base64_media);
@@ -739,7 +754,7 @@ fn render_card(card: &Card, config: &Config, prefs: Option<&Prefs>) -> Markup {
        div class=(class) {
            @if let Some(ref video) = card.video {
                div class="card-container" {
-                   (render_video(video, config, prefs))
+                   (render_video(video, config, prefs, false))
                    a class="card-content-container" href=(card.url) {
                        (render_card_content(card))
                    }
@@ -858,7 +873,7 @@ fn render_tweet_text_html(
 ///
 /// Structure: `attachments card` > `gallery-video [card-container]` >
 ///   `attachment video-container` > video/img + overlay.
-fn render_video(video: &Video, config: &Config, prefs: Option<&Prefs>) -> Markup {
+fn render_video(video: &Video, config: &Config, prefs: Option<&Prefs>, big_thumb: bool) -> Markup {
    let has_card_content = !video.description.is_empty() || !video.title.is_empty();
    let container = if has_card_content {
       " card-container"
@@ -868,6 +883,8 @@ fn render_video(video: &Video, config: &Config, prefs: Option<&Prefs>) -> Markup
 
    let thumb = if video.thumb.is_empty() {
       String::new()
+   } else if big_thumb {
+      get_medium_pic(&video.thumb, config)
    } else {
       get_small_pic(&video.thumb, config)
    };

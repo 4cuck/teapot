@@ -122,6 +122,17 @@ pub fn render_preferences_form(
                            (gen_checkbox("mp4Playback", "Enable mp4 video playback", prefs.mp4_playback))
                            (gen_checkbox("muteVideos", "Mute videos by default", prefs.mute_videos))
                            (gen_checkbox("autoplayGifs", "Autoplay gifs", prefs.autoplay_gifs))
+                           (gen_select("mediaView", "Default media view", &prefs.media_view, &[
+                              ("Timeline", "Timeline"),
+                              ("Grid", "Grid"),
+                              ("Gallery", "Gallery"),
+                           ]))
+                           (gen_select("gallerySize", "Gallery column size", &prefs.gallery_size, &[
+                              ("Small", "Small"),
+                              ("Medium", "Medium"),
+                              ("Large", "Large"),
+                           ]))
+                           (gen_checkbox("compactGallery", "Compact media gallery (no profile info or text)", prefs.compact_gallery))
                        }
                    }
 

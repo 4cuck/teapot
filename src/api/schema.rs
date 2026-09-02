@@ -35,6 +35,7 @@ pub enum MediaType {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 pub enum InstructionType {
    TimelineAddEntries,
+   TimelineAddToModule,
    TimelinePinEntry,
    TimelineReplaceEntry,
    TimelineClearCache,
@@ -439,14 +440,14 @@ struct ImageValueInner {
 #[derive(Deserialize, Default)]
 #[serde(default)]
 pub struct ListData {
-   pub id_str:       Option<String>,
-   pub rest_id:      Option<String>,
-   pub name:         Option<String>,
-   pub description:  Option<String>,
-   pub member_count: i32,
-   pub user_results: Option<NestedResult<UserData>>,
+   pub id_str:             Option<String>,
+   pub rest_id:            Option<String>,
+   pub name:               Option<String>,
+   pub description:        Option<String>,
+   pub member_count:       i32,
+   pub user_results:       Option<NestedResult<UserData>>,
    #[serde(default, deserialize_with = "deser_banner_url")]
-   pub banner_url:   Option<String>,
+   pub banner_url:         Option<String>,
 }
 
 // ── Tweet types ─────────────────────────────────────────────────────────

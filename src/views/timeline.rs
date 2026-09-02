@@ -31,7 +31,7 @@ pub fn render_timeline(
    cursor: Option<&str>,
    base_url: Option<&str>,
 ) -> Markup {
-   render_timeline_full(groups, config, cursor, base_url, None, None, None)
+   render_timeline_full(groups, config, cursor, base_url, None, None, None, "")
 }
 
 /// Render a timeline with prefs support (for bidi).
@@ -51,6 +51,29 @@ pub fn render_timeline_with_prefs(
       None,
       Some(prefs),
       newer_url,
+      "",
+   )
+}
+
+/// Render a timeline with a media view (`timeline` / `grid` / `gallery`).
+pub fn render_timeline_with_view(
+   groups: &[Tweets],
+   config: &Config,
+   cursor: Option<&str>,
+   base_url: Option<&str>,
+   prefs: &Prefs,
+   newer_url: Option<&str>,
+   view: &str,
+) -> Markup {
+   render_timeline_full(
+      groups,
+      config,
+      cursor,
+      base_url,
+      None,
+      Some(prefs),
+      newer_url,
+      view,
    )
 }
 
@@ -64,7 +87,7 @@ pub fn render_timeline_with_pinned_and_prefs(
    prefs: Option<&Prefs>,
    newer_url: Option<&str>,
 ) -> Markup {
-   render_timeline_full(groups, config, cursor, base_url, pinned, prefs, newer_url)
+   render_timeline_full(groups, config, cursor, base_url, pinned, prefs, newer_url, "")
 }
 
 /// Render "scroll to top" button.
@@ -101,7 +124,7 @@ fn render_none_found() -> Markup {
 use super::renderutils::tweet_link;
 
 /// Render a thread group wrapped in thread-line.
-fn render_thread(thread: &[&Tweet], config: &Config, prefs: Option<&Prefs>) -> Markup {
+fn render_thread(thread: &[&Tweet], config: &Config, prefs: Option<&Prefs>, big_thumb: bool) -> Markup {
    // Sort by ID for correct order
    let mut sorted: Vec<&Tweet> = thread.to_vec();
    sorted.sort_by_key(|tweet| tweet.id);
@@ -131,7 +154,7 @@ fn render_thread(thread: &[&Tweet], config: &Config, prefs: Option<&Prefs>) -> M
                    (false, false) if idx == 0 => "thread thread-first",
                    (false, false) => "thread thread-middle",
                };
-               (TweetRenderer::new(tweet, config, false).maybe_prefs(prefs).extra_class(thread_class).index(idx).render())
+               (TweetRenderer::new(tweet, config, false).maybe_prefs(prefs).extra_class(thread_class).index(idx).big_thumb(big_thumb).render())
                @if show_thread && tweet.has_thread {
                    div class="show-thread" {
                        a href=(tweet_link(tweet)) { "Show this thread" }
@@ -145,6 +168,14 @@ fn render_thread(thread: &[&Tweet], config: &Config, prefs: Option<&Prefs>) -> M
 /// Full timeline rendering with all options.
 /// `groups` preserves conversation structure from the API. Each inner
 /// Vec<Tweet> is a conversation thread (parent -> reply chain).
+fn timeline_view_class(view: &str) -> &'static str {
+   match view {
+      "grid" => "timeline media-grid-view",
+      "gallery" => "timeline media-gallery-view",
+      _ => "timeline",
+   }
+}
+
 fn render_timeline_full(
    groups: &[Tweets],
    config: &Config,
@@ -153,6 +184,7 @@ fn render_timeline_full(
    pinned: Option<&Tweet>,
    prefs: Option<&Prefs>,
    newer_url: Option<&str>,
+   view: &str,
 ) -> Markup {
    let load_more_url = match (cursor, base_url) {
       (Some(cur), Some(base)) => Some(formatters::cursor_url(base, cur)),
@@ -163,9 +195,17 @@ fn render_timeline_full(
    // Get pinned tweet ID to avoid duplicates
    let pinned_id = pinned.map(|tweet| tweet.id);
    let has_tweets = groups.iter().any(|group| !group.is_empty()) || pinned.is_some();
+   let is_gallery = view == "gallery";
+   let big_thumb = is_gallery && prefs.is_some_and(|pref| pref.gallery_size.eq_ignore_ascii_case("Large"));
+   let masonry_class = if prefs.is_some_and(|pref| pref.compact_gallery) {
+      "gallery-masonry compact"
+   } else {
+      "gallery-masonry"
+   };
+   let col_size = prefs.map_or("medium", Prefs::gallery_col_size);
 
    html! {
-       div class="timeline" {
+       div class=(timeline_view_class(view)) {
            // "Load newest" link when viewing paginated results
            @if let Some(url) = newer_url {
                div class="timeline-item show-more" {
@@ -176,28 +216,12 @@ fn render_timeline_full(
            @if !has_tweets {
                (render_none_found())
            } @else {
-               // Render pinned tweet first
-               @if let Some(pinned_tweet) = pinned {
-                   @if !prefs.is_some_and(|pref| pref.hide_pins) {
-                       (TweetRenderer::new(pinned_tweet, config, false).pinned(true).maybe_prefs(prefs).render())
+               @if is_gallery {
+                   div class=(masonry_class) data-col-size=(col_size) {
+                       (render_timeline_items(groups, config, pinned, prefs, pinned_id, big_thumb, true))
                    }
-               }
-
-               // Each group renders as one conversation thread from the API
-               @for group in groups {
-                   // Filter out pinned duplicates
-                   @let filtered = group.iter().filter(|tweet| Some(tweet.id) != pinned_id).collect::<Vec<_>>();
-                   @if filtered.len() > 1 {
-                       (render_thread(&filtered, config, prefs))
-                   } @else if let Some(tweet) = filtered.first() {
-                       (TweetRenderer::new(tweet, config, false).maybe_prefs(prefs).render())
-                       // "Show this thread" for standalone tweets that have threads
-                       @if tweet.has_thread {
-                           div class="show-thread" {
-                               a href=(tweet_link(tweet)) { "Show this thread" }
-                           }
-                       }
-                   }
+               } @else {
+                   (render_timeline_items(groups, config, pinned, prefs, pinned_id, big_thumb, view == "grid"))
                }
 
                // Pagination
@@ -212,6 +236,40 @@ fn render_timeline_full(
                // Scroll to top
                @if has_tweets {
                    (render_to_top())
+               }
+           }
+       }
+   }
+}
+
+fn render_timeline_items(
+   groups: &[Tweets],
+   config: &Config,
+   pinned: Option<&Tweet>,
+   prefs: Option<&Prefs>,
+   pinned_id: Option<i64>,
+   big_thumb: bool,
+   flatten: bool,
+) -> Markup {
+   html! {
+       @if let Some(pinned_tweet) = pinned {
+           @if !prefs.is_some_and(|pref| pref.hide_pins) {
+               (TweetRenderer::new(pinned_tweet, config, false).pinned(true).maybe_prefs(prefs).big_thumb(big_thumb).render())
+           }
+       }
+
+       @for group in groups {
+           @let filtered = group.iter().filter(|tweet| Some(tweet.id) != pinned_id).collect::<Vec<_>>();
+           @if filtered.len() > 1 && !flatten {
+               (render_thread(&filtered, config, prefs, big_thumb))
+           } @else {
+               @for tweet in filtered {
+                   (TweetRenderer::new(tweet, config, false).maybe_prefs(prefs).big_thumb(big_thumb).render())
+                   @if !flatten && tweet.has_thread && !big_thumb {
+                       div class="show-thread" {
+                           a href=(tweet_link(tweet)) { "Show this thread" }
+                       }
+                   }
                }
            }
        }
@@ -233,6 +291,25 @@ pub fn render_timeline_tabs(active_tab: TimelineKind, username: &str) -> Markup 
            }
            li class=(if active_tab == TimelineKind::Search { "tab-item active" } else { "tab-item" }) {
                a href=(format!("/{username}/search")) { "Search" }
+           }
+       }
+   }
+}
+
+/// Timeline / Grid / Gallery switcher for media tabs.
+pub fn render_media_view_tabs(base: &str, current: &str) -> Markup {
+   let sep = if base.contains('?') { '&' } else { '?' };
+   let tabs: &[(&str, &str)] = &[
+      ("timeline", "Timeline"),
+      ("grid", "Grid"),
+      ("gallery", "Gallery"),
+   ];
+   html! {
+       ul class="tab media-view-tabs" {
+           @for &(id, label) in tabs {
+               li class=(if current == id { "tab-item active" } else { "tab-item" }) {
+                   a href=(format!("{base}{sep}view={id}")) { (label) }
+               }
            }
        }
    }

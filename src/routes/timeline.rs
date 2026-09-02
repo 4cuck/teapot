@@ -149,6 +149,7 @@ fn parse_usernames(name: &str) -> Option<Vec<String>> {
 pub struct TimelineQuery {
    pub tab:    Option<String>,
    pub cursor: Option<String>,
+   pub view:   Option<String>,
    /// For AJAX infinite scroll requests - returns only tweet HTML.
    pub scroll: Option<String>,
 }
@@ -286,6 +287,7 @@ async fn user_tab_handler(
    cursor: Option<&str>,
    tab: TimelineKind,
    include_photo_rail: bool,
+   view: &str,
 ) -> Result<Response> {
    let user = get_cached_user(state, username).await?;
 
@@ -363,17 +365,28 @@ async fn user_tab_handler(
          if let Some(first) = tweets.first() {
             helpers::prefetch_profiles(state, first);
          }
-         let base_url = format!("/{username}/{tab_str}");
+         let base_url = if tab == TimelineKind::Media && view != "timeline" && !view.is_empty() {
+            format!("/{username}/{tab_str}?view={view}")
+         } else {
+            format!("/{username}/{tab_str}")
+         };
          let newer = has_request_cursor.then_some(base_url.as_str());
+         let media_base = format!("/{username}/{tab_str}");
 
-         let timeline_content = timeline::render_timeline_with_prefs(
-            &tweets,
-            &state.config,
-            next_cursor.as_deref(),
-            Some(&base_url),
-            prefs,
-            newer,
-         );
+         let timeline_content = html! {
+             @if tab == TimelineKind::Media {
+                 (timeline::render_media_view_tabs(&media_base, view))
+             }
+             (timeline::render_timeline_with_view(
+                 &tweets,
+                 &state.config,
+                 next_cursor.as_deref(),
+                 Some(&base_url),
+                 prefs,
+                 newer,
+                 if tab == TimelineKind::Media { view } else { "" },
+             ))
+         };
          let content = profile::render_profile_page(
             &user,
             &photo_rail,
@@ -381,6 +394,7 @@ async fn user_tab_handler(
             prefs,
             tab,
             &timeline_content,
+            view,
          );
 
          let title = format!("{title_prefix} @{}", user.username);
@@ -413,6 +427,7 @@ async fn user_replies(
       query.cursor.as_deref(),
       TimelineKind::Replies,
       true,
+      "",
    )
    .await
 }
@@ -424,6 +439,7 @@ async fn user_media(
    Query(query): Query<TimelineQuery>,
 ) -> Result<Response> {
    let prefs = Prefs::from_cookies(&jar, &state.config);
+   let view = prefs.resolved_media_view(query.view.as_deref());
    user_tab_handler(
       &state,
       &prefs,
@@ -431,6 +447,7 @@ async fn user_media(
       query.cursor.as_deref(),
       TimelineKind::Media,
       false,
+      view,
    )
    .await
 }
@@ -487,7 +504,7 @@ async fn user_search(
          let newer = query.cursor.is_some().then_some(base_url.as_str());
          let timeline_content = html! {
              div class="timeline-header" {
-                 (render_search_panel_with_action(search_query, None, &search_action))
+                 (render_search_panel_with_action(search_query, None, &search_action, "tweets", ""))
              }
              (timeline::render_timeline_with_prefs(&tweets, &state.config, cursor.as_deref(), Some(&base_url), &prefs, newer))
          };
@@ -498,6 +515,7 @@ async fn user_search(
             &prefs,
             TimelineKind::Search,
             &timeline_content,
+            "",
          );
 
          let title = if search_query.is_empty() {

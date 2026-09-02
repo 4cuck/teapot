@@ -29,6 +29,7 @@ use crate::{
 };
 
 const SMALL_WEBP: &str = "?name=small&format=webp";
+const MEDIUM_WEBP: &str = "?name=medium&format=webp";
 
 /// Get the canonical link path for a tweet (`/{user}/status/{id}`).
 pub fn tweet_link(tweet: &Tweet) -> String {
@@ -45,8 +46,17 @@ pub fn tweet_link(tweet: &Tweet) -> String {
 
 /// Append small webp params and proxy the URL.
 pub fn get_small_pic(url: &str, config: &Config) -> String {
+   sized_pic(url, SMALL_WEBP, config)
+}
+
+/// Append medium webp params and proxy the URL (gallery large columns).
+pub fn get_medium_pic(url: &str, config: &Config) -> String {
+   sized_pic(url, MEDIUM_WEBP, config)
+}
+
+fn sized_pic(url: &str, suffix: &str, config: &Config) -> String {
    let url = if !url.contains('?') && !url.ends_with("placeholder.png") {
-      format!("{url}{SMALL_WEBP}")
+      format!("{url}{suffix}")
    } else {
       url.to_owned()
    };

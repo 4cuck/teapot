@@ -78,6 +78,9 @@ fn prefs_to_cookies(prefs: &Prefs, config: &Config) -> Vec<Cookie<'static>> {
       str_cookie("replaceYouTube", &prefs.replace_youtube),
       str_cookie("replaceReddit", &prefs.replace_reddit),
       str_cookie("kagiToken", &prefs.kagi_token),
+      str_cookie("mediaView", &prefs.media_view),
+      str_cookie("gallerySize", &prefs.gallery_size),
+      bool_cookie("compactGallery", prefs.compact_gallery),
    ]
 }
 
@@ -129,6 +132,9 @@ fn encode_prefs(prefs: &Prefs, config: &Config) -> String {
    enc_string!("replaceTwitter", replace_twitter);
    enc_string!("replaceYouTube", replace_youtube);
    enc_string!("replaceReddit", replace_reddit);
+   enc_string!("mediaView", media_view);
+   enc_string!("gallerySize", gallery_size);
+   enc_checkbox!("compactGallery", compact_gallery);
    pairs.join(",")
 }
 
@@ -202,6 +208,12 @@ pub struct PrefsForm {
    pub replace_reddit:       Option<String>,
    #[serde(rename = "kagiToken")]
    pub kagi_token:           Option<String>,
+   #[serde(rename = "mediaView")]
+   pub media_view:           Option<String>,
+   #[serde(rename = "gallerySize")]
+   pub gallery_size:         Option<String>,
+   #[serde(rename = "compactGallery")]
+   pub compact_gallery:      Option<String>,
 }
 
 impl PrefsForm {
@@ -233,6 +245,9 @@ impl PrefsForm {
          replace_youtube:      parse_str(&self.replace_youtube, defaults.replace_youtube),
          replace_reddit:       parse_str(&self.replace_reddit, defaults.replace_reddit),
          kagi_token:           parse_str(&self.kagi_token, defaults.kagi_token),
+         media_view:           parse_str(&self.media_view, defaults.media_view),
+         gallery_size:         parse_str(&self.gallery_size, defaults.gallery_size),
+         compact_gallery:      parse_bool(&self.compact_gallery),
       }
    }
 }

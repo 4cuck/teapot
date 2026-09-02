@@ -1,89 +1,45 @@
 .search-title {
-  font-weight: 600;
+  font-weight: bold;
   display: inline-block;
   margin-top: 4px;
-  color: var(--tp-on-surface);
 }
 
 .search-field {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  align-items: center; /* add this */
 }
 
 .search-field button {
-  margin: 0;
-  padding: 8px 16px;
-  height: 36px;
-  /* display: flex; */
-  background-color: var(--tp-primary);
-  color: var(--tp-on-primary);
-  border: none;
-  border-radius: var(--shape-md);
-  font-weight: 500;
-  cursor: pointer;
-  /* transition: all 0.15s ease;
-  box-shadow: var(--elevation-1); */
-}
-
-.search-field button:hover {
-  background-color: var(--tp-on-primary-container);
+  margin: 0 2px 0 0;
+  padding: 0 1px 1px 4px;
+  height: 23px;
+  display: flex;
+  align-items: center;
 }
 
 .search-field .pref-input {
-  margin: 0;
+  margin: 0 4px 0 0;
   flex-grow: 1;
-  height: auto;
+  height: 23px;
 }
 
 .search-field input[type="text"],
 .search-field input[type="number"] {
-  height: 36px;
-  width: 100%;
-  background-color: var(--tp-surface-container-highest);
-  border: 1px solid transparent;
-  padding: 0 12px;
-  color: var(--tp-on-surface);
-  font-size: 14px;
-}
-
-.search-field input[type="text"]:hover,
-.search-field input[type="number"]:hover {
-  background-color: var(--tp-surface-container-high);
-}
-
-.search-field input[type="text"]:focus,
-.search-field input[type="number"]:focus {
-  background-color: var(--tp-surface-container-highest);
-  border-color: var(--tp-primary);
-  outline: none;
+  height: calc(100% - 4px);
+  width: calc(100% - 8px);
 }
 
 .search-field > label {
-  display: inline-flex;
-  align-items: center;
-  /* background-color: var(--tp-surface-container); */
-  color: var(--tp-on-surface-variant);
-  border: 1px solid var(--tp-outline-variant);
-  padding: 4px 4px;
+  display: inline;
+  background-color: var(--bg_elements);
+  color: var(--fg_color);
+  border: 1px solid var(--accent_border);
+  padding: 1px 1px 2px 4px;
   font-size: 14px;
   cursor: pointer;
-  border-radius: var(--shape-md);
-  font-weight: 500;
-  transition: all 0.15s ease;
+  margin-bottom: 2px;
 }
 
-.search-field > label:hover {
-  border-color: var(--tp-outline);
-  background-color: var(--tp-surface-container-high);
-}
-
-.search-field > label:active {
-  background-color: var(--tp-surface-container-highest);
-}
-
-/* create-toggle(search-panel, 380px) */
 .search-field #search-panel-toggle {
   display: none;
 }
@@ -100,13 +56,10 @@
   width: 100%;
   max-height: 0;
   overflow: hidden;
-  transition: max-height 0.4s ease;
+  transition: max-height 0.4s;
   flex-grow: 1;
   font-weight: initial;
-  /* text-align: left; */
-  background-color: var(--tp-surface-container);
-  border-radius: var(--shape-lg);
-  margin-top: 8px;
+  text-align: left;
 }
 
 .search-panel .checkbox-container {
@@ -120,18 +73,16 @@
   right: unset;
   left: -22px;
   line-height: 1.6em;
-  background-color: var(--tp-surface-container-highest);
-  border: 2px solid var(--tp-outline);
-  border-radius: var(--shape-xs);
 }
 
+.search-panel .checkbox-container .checkbox:after {
+  top: -4px;
+}
 
 .search-row {
   display: flex;
   flex-wrap: wrap;
   line-height: unset;
-  padding: 16px;
-  gap: 12px;
 }
 
 .search-row > div {
@@ -140,24 +91,7 @@
 }
 
 .search-row input {
-  height: 36px;
-  background-color: var(--tp-surface-container-highest);
-  border: 1px solid transparent;
-  border-radius: var(--shape-sm);
-  padding: 0 12px;
-  color: var(--tp-on-surface);
-  font-size: 14px;
-  transition: all 0.15s ease;
-}
-
-.search-row input:hover {
-  background-color: var(--tp-surface-container-high);
-}
-
-.search-row input:focus {
-  background-color: var(--tp-surface-container-highest);
-  border-color: var(--tp-primary);
-  outline: none;
+  height: 21px;
 }
 
 .search-row .pref-input {
@@ -166,7 +100,7 @@
 }
 
 .search-row .pref-input input {
-  height: 36px;
+  height: 21px;
   margin-top: 1px;
 }
 
@@ -177,7 +111,104 @@
   grid-column-gap: 10px;
 }
 
-/* search-resize expansions for .profile-tabs context */
+.search-filter-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+}
+
+.search-filter-group {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.search-filter-group legend {
+  font-size: 14px;
+  font-weight: bold;
+  border: 0;
+  margin: 0;
+  padding: 4px 0 0;
+}
+
+.search-filter-group p {
+  margin: 0 0 6px;
+  color: var(--fg_faded);
+  font-size: 13px;
+}
+
+.list-result {
+  display: flex;
+  align-items: flex-start;
+}
+
+.list-result .list-result-banner {
+  flex-shrink: 0;
+  width: 56px;
+  height: 56px;
+  margin-right: 10px;
+  border-radius: 8px;
+  overflow: hidden;
+  background-color: var(--darker_grey);
+  z-index: 1;
+}
+
+.list-result .list-result-banner img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.list-result .list-result-body {
+  min-width: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.list-result .list-result-body a {
+  pointer-events: all;
+}
+
+.list-result .list-result-title {
+  align-items: baseline;
+}
+
+.list-result .list-members {
+  flex-shrink: 0;
+  margin-left: 0.3em;
+  color: var(--fg_faded);
+}
+
+.list-result .list-result-context {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 2px;
+  color: var(--fg_faded);
+}
+
+.list-result .list-result-context a {
+  color: var(--fg_dark);
+}
+
+.list-result .list-result-context a.fullname {
+  color: var(--fg_color);
+}
+
+.list-result .list-facepile {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  margin-right: 4px;
+}
+
+.list-result .list-result-description {
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: all;
+}
+
 @media (max-width: 820px) {
   .profile-tabs .search-toggles {
     grid-template-columns: repeat(5, auto);
@@ -192,45 +223,11 @@
   .profile-tabs .search-toggles {
     grid-template-columns: repeat(4, auto);
   }
-
-  .profile-tabs #search-panel-toggle:checked ~ .search-panel {
-    max-height: 380px !important;
-  }
 }
 
 @media (max-width: 700px) {
+  .search-toggles,
   .profile-tabs .search-toggles {
-    grid-template-columns: repeat(5, auto);
-  }
-
-  .profile-tabs #search-panel-toggle:checked ~ .search-panel {
-    max-height: 380px !important;
-  }
-}
-
-@media (max-width: 485px) {
-  .profile-tabs .search-toggles {
-    grid-template-columns: repeat(4, auto);
-  }
-
-  .profile-tabs #search-panel-toggle:checked ~ .search-panel {
-    max-height: 380px !important;
-  }
-}
-
-@media (max-width: 410px) {
-  .profile-tabs .search-toggles {
-    grid-template-columns: repeat(3, auto);
-  }
-
-  .profile-tabs #search-panel-toggle:checked ~ .search-panel {
-    max-height: 380px !important;
-  }
-}
-
-/* search-resize expansions for global context */
-@media (max-width: 700px) {
-  .search-toggles {
     grid-template-columns: repeat(5, auto);
   }
 
@@ -240,21 +237,15 @@
 }
 
 @media (max-width: 485px) {
-  .search-toggles {
+  .search-toggles,
+  .profile-tabs .search-toggles {
     grid-template-columns: repeat(4, auto);
-  }
-
-  #search-panel-toggle:checked ~ .search-panel {
-    max-height: 380px !important;
   }
 }
 
 @media (max-width: 410px) {
-  .search-toggles {
+  .search-toggles,
+  .profile-tabs .search-toggles {
     grid-template-columns: repeat(3, auto);
-  }
-
-  #search-panel-toggle:checked ~ .search-panel {
-    max-height: 380px !important;
   }
 }

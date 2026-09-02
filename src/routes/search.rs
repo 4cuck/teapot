@@ -83,6 +83,7 @@ pub struct SearchQuery {
    #[serde(rename = "f")]
    pub filter:     Option<String>,
    pub cursor:     Option<String>,
+   pub view:       Option<String>,
    // Filter parameters
    pub from:       Option<String>,
    pub since:      Option<String>,
@@ -226,6 +227,15 @@ fn is_scroll_request(params: &SearchQuery) -> bool {
    params.scroll.as_deref() == Some("true")
 }
 
+fn search_tab(params: &SearchQuery) -> &'static str {
+   match params.filter.as_deref() {
+      Some("users") => "users",
+      Some("top") => "top",
+      Some("media") => "media",
+      _ => "tweets",
+   }
+}
+
 fn search_error(
    config: &Config,
    prefs: &Prefs,
@@ -335,44 +345,49 @@ async fn search(
       return Ok(Redirect::to(&format!("/{cleaned}")).into_response());
    }
 
-   // Check if this is a user search
-   let is_user_search = params.filter.as_deref() == Some("users");
+   let active_tab = search_tab(&params);
+   let media_view = if active_tab == "media" {
+      prefs.resolved_media_view(params.view.as_deref())
+   } else {
+      ""
+   };
 
    // Handle empty query - show search UI without calling API
    if raw_q.is_empty() && params.from.is_none() {
       let filters = params.to_filters();
-      if is_user_search {
-         let content = search_view::render_user_search_results(
-            &raw_q,
-            &[],
-            &state.config,
-            None,
-            None,
-            Some(&prefs),
-         );
-         let markup = layout::PageLayout::new(&state.config, "Search", content)
-            .prefs(&prefs)
-            .render();
-         return Ok(Html(markup.into_string()).into_response());
-      }
-      let empty_tweets = Vec::new();
-      let content = search_view::render_search_results_with_prefs(
-         &raw_q,
-         &empty_tweets,
-         &state.config,
-         None,
-         Some(&prefs),
-         Some(&filters),
-         None,
-         "tweets",
-      );
+      let content = match active_tab {
+         "users" => {
+            search_view::render_user_search_results(
+               &raw_q,
+               &[],
+               &state.config,
+               None,
+               None,
+               Some(&prefs),
+            )
+         },
+         _ => {
+            let empty_tweets = Vec::new();
+            search_view::render_search_results_with_prefs(
+               &raw_q,
+               &empty_tweets,
+               &state.config,
+               None,
+               Some(&prefs),
+               Some(&filters),
+               None,
+               active_tab,
+               media_view,
+            )
+         },
+      };
       let markup = layout::PageLayout::new(&state.config, "Search", content)
          .prefs(&prefs)
          .render();
       return Ok(Html(markup.into_string()).into_response());
    }
 
-   if is_user_search {
+   if active_tab == "users" {
       let search_result = if params.cursor.is_none() {
          let cache_key = cache_keys::search_users(&raw_q, None);
          if let Some(cached) = helpers::swr_take::<PaginatedResult<User>, _, _>(&state, &cache_key, {
@@ -455,22 +470,12 @@ async fn search(
       }
    } else {
       // Tweet search
-      // Parse query with filters
       let query = params.to_query();
-
-      // Build the actual search query for Twitter API
       let api_query = query.build();
-
-      // Map query kind to Twitter API product.
-      // Media uses "Latest" + filter:media in query, same as the default.
       let product = match query.kind {
          QueryKind::Top => "Top",
+         QueryKind::Media => "Media",
          _ => "Latest",
-      };
-      let active_tab = match query.kind {
-         QueryKind::Top => "top",
-         QueryKind::Media => "media",
-         _ => "tweets",
       };
 
       let search_result = if params.cursor.is_none() {
@@ -520,10 +525,15 @@ async fn search(
 
             let filters = params.to_filters();
             let newer_url = params.cursor.is_some().then(|| {
-               format!(
-                  "/search?q={}",
+               let mut url = format!(
+                  "/search?q={}&f={active_tab}",
                   percent_encoding::utf8_percent_encode(&raw_q, percent_encoding::NON_ALPHANUMERIC)
-               )
+               );
+               if active_tab == "media" && !media_view.is_empty() && media_view != "timeline" {
+                  url.push_str("&view=");
+                  url.push_str(media_view);
+               }
+               url
             });
             let content = search_view::render_search_results_with_prefs(
                display_query,
@@ -534,6 +544,7 @@ async fn search(
                Some(&filters),
                newer_url.as_deref(),
                active_tab,
+               media_view,
             );
             let title = format!("Search ({raw_q})");
             let canonical = format!(
@@ -589,6 +600,7 @@ async fn hashtag(
          query:  Some(hashtag_query),
          filter: query.filter,
          cursor: query.cursor,
+         view:   query.view,
          scroll: query.scroll,
          ..Default::default()
       }),

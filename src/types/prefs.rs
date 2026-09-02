@@ -34,6 +34,9 @@ pub struct Prefs {
    pub replace_youtube:      String,
    pub replace_reddit:       String,
    pub kagi_token:           String,
+   pub media_view:           String,
+   pub gallery_size:         String,
+   pub compact_gallery:      bool,
 }
 
 impl Prefs {
@@ -61,6 +64,9 @@ impl Prefs {
          replace_youtube:      config.preferences.replace_youtube.clone(),
          replace_reddit:       config.preferences.replace_reddit.clone(),
          kagi_token:           String::new(),
+         media_view:           "Timeline".to_owned(),
+         gallery_size:         "Medium".to_owned(),
+         compact_gallery:      false,
       }
    }
 
@@ -98,6 +104,31 @@ impl Prefs {
          replace_youtube:      str_pref("replaceYouTube", defaults.replace_youtube),
          replace_reddit:       str_pref("replaceReddit", defaults.replace_reddit),
          kagi_token:           str_pref("kagiToken", defaults.kagi_token),
+         media_view:           str_pref("mediaView", defaults.media_view),
+         gallery_size:         str_pref("gallerySize", defaults.gallery_size),
+         compact_gallery:      bool_pref("compactGallery", defaults.compact_gallery),
+      }
+   }
+
+   /// Resolve `?view=` against the saved default media view.
+   pub fn resolved_media_view(&self, requested: Option<&str>) -> &'static str {
+      match requested.map(str::trim).unwrap_or_default().to_ascii_lowercase().as_str() {
+         "grid" => "grid",
+         "gallery" => "gallery",
+         "timeline" => "timeline",
+         _ => match self.media_view.to_ascii_lowercase().as_str() {
+            "grid" => "grid",
+            "gallery" => "gallery",
+            _ => "timeline",
+         },
+      }
+   }
+
+   pub fn gallery_col_size(&self) -> &'static str {
+      match self.gallery_size.to_ascii_lowercase().as_str() {
+         "small" => "small",
+         "large" => "large",
+         _ => "medium",
       }
    }
 
@@ -124,6 +155,9 @@ impl Prefs {
       "replaceYouTube",
       "replaceReddit",
       "kagiToken",
+      "mediaView",
+      "gallerySize",
+      "compactGallery",
    ];
 
    /// Preference names accepted from shareable URL preference imports.
@@ -148,5 +182,8 @@ impl Prefs {
       "replaceTwitter",
       "replaceYouTube",
       "replaceReddit",
+      "mediaView",
+      "gallerySize",
+      "compactGallery",
    ];
 }

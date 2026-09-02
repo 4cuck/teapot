@@ -46,8 +46,11 @@ pub struct SessionLimits {
    /// Sensitive-media and search-safety filters have already been turned off
    /// for this session, so startup does not POST the same settings again.
    #[serde(default)]
-   pub filters_cleared: bool,
-   pub apis:            HashMap<String, RateLimit>,
+   pub filters_cleared:  bool,
+   /// An adult birthdate has already been written so X stops age-gating media.
+   #[serde(default)]
+   pub age_gate_cleared: bool,
+   pub apis:             HashMap<String, RateLimit>,
 }
 
 /// How long a globally-limited session stays limited before auto-recovery (15
@@ -134,9 +137,10 @@ impl Session {
          SessionLimits {
             limited:         self.limited,
             limited_at:      self.limited_at,
-            rejected:        false,
-            filters_cleared: false,
-            apis:            self.apis,
+            rejected:         false,
+            filters_cleared:  false,
+            age_gate_cleared: false,
+            apis:             self.apis,
          },
       )
    }

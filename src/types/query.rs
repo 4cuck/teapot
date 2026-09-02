@@ -65,6 +65,9 @@ pub struct Query {
    pub min_likes:      String,
    #[serde(default)]
    pub sep:            String,
+   /// Media display mode: `timeline`, `grid`, or `gallery`.
+   #[serde(default)]
+   pub view:           String,
 }
 
 impl Query {
@@ -243,6 +246,10 @@ impl Query {
          QueryKind::Tweets => params.push("f=tweets".to_owned()),
          QueryKind::UserList => params.push("f=userlist".to_owned()),
          QueryKind::Top => params.push("f=top".to_owned()),
+      }
+
+      if !self.view.is_empty() && self.kind == QueryKind::Media {
+         params.push(format!("view={}", encode_query_component(&self.view)));
       }
 
       for filter in &self.filters {

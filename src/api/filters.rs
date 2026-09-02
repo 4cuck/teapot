@@ -1,8 +1,10 @@
 //! Turn off X's default sensitive-content filters on cookie sessions.
 //!
-//! New accounts hide NSFW media and strip it from search. That leaks into
-//! teapawt search, so each cookie session is asked once to show sensitive
-//! media and to stop filtering search.
+//! New accounts hide NSFW media, strip it from search, and age-gate adult
+//! media until a birthdate is on the profile. That leaks into teapawt search,
+//! so each cookie session is asked once to show sensitive media, stop
+//! filtering search, and store an adult birthdate (kept private on the
+//! profile).
 
 use std::time::Duration;
 
@@ -26,6 +28,11 @@ use crate::{
 
 const SEARCH_SAFETY_BODY: &str = r#"{"optInFiltering":false,"optInBlocking":false}"#;
 const DISPLAY_SENSITIVE_BODY: &str = "display_sensitive_media=true";
+/// X's settings UI posts these exact field names to `account/update_profile`.
+/// Visibility is `self` so the date is not shown on the public profile.
+const ADULT_BIRTHDATE_BODY: &str = "birthdate_day=15&birthdate_month=6&birthdate_year=1990&\
+                                   birthdate_visibility=self&birthdate_year_visibility=self&\
+                                   skip_status=true";
 
 #[expect(
    clippy::multiple_inherent_impl,
@@ -47,22 +54,42 @@ impl ApiClient {
       }
       tracing::info!(
          count = ids.len(),
-         "clearing sensitive-content filters on cookie sessions"
+         "clearing sensitive-content filters and age gates on cookie sessions"
       );
       let mut ok = 0_usize;
       for id in ids {
-         match self.clear_session_filters(id).await {
+         match self.clear_session_filters_retry(id).await {
             Ok(()) => {
                self.sessions.mark_filters_cleared(id).await;
                ok += 1;
             },
             Err(err) => {
-               tracing::warn!(session_id = id, "failed to clear NSFW filters: {err}");
+               tracing::warn!(
+                  session_id = id,
+                  "failed to clear NSFW filters or age gate: {err}"
+               );
             },
          }
          sleep(Duration::from_millis(250)).await;
       }
-      tracing::info!(ok, "sensitive-content filters cleared");
+      tracing::info!(ok, "sensitive-content filters and age gates cleared");
+   }
+
+   async fn clear_session_filters_retry(&self, session_id: i64) -> Result<()> {
+      let mut last_err = None;
+      for attempt in 0..3_u8 {
+         match self.clear_session_filters(session_id).await {
+            Ok(()) => return Ok(()),
+            Err(err)
+               if attempt < 2 && err.to_string().contains("SOCKS5") =>
+            {
+               last_err = Some(err);
+               sleep(Duration::from_secs(1)).await;
+            },
+            Err(err) => return Err(err),
+         }
+      }
+      Err(last_err.unwrap_or_else(|| Error::Internal("filter sync retry exhausted".into())))
    }
 
    async fn clear_session_filters(&self, session_id: i64) -> Result<()> {
@@ -77,6 +104,7 @@ impl ApiClient {
       let user_id = self.session_user_id(&session).await?;
       self.set_display_sensitive_media(&session).await?;
       self.set_search_safety(&session, &user_id).await?;
+      self.set_adult_birthdate(&session).await?;
       Ok(())
    }
 
@@ -147,6 +175,40 @@ impl ApiClient {
       {
          return Err(Error::Internal(
             "account settings did not enable display_sensitive_media".into(),
+         ));
+      }
+      Ok(())
+   }
+
+   async fn set_adult_birthdate(&self, session: &SessionLease) -> Result<()> {
+      let path = "/1.1/account/update_profile.json";
+      let mut headers = self
+         .cookie_rest_headers(session, "POST", path, "application/x-www-form-urlencoded")
+         .await?;
+      headers.insert(
+         header::REFERER,
+         header::HeaderValue::from_static("https://x.com/settings/profile"),
+      );
+      let response = self
+         .client
+         .post_on(
+            endpoints::UPDATE_PROFILE_URL,
+            &headers,
+            Bytes::from_static(ADULT_BIRTHDATE_BODY.as_bytes()),
+            self.proxy_for(session).as_ref(),
+         )
+         .await?;
+      let bytes = match self
+         .account_response(session, endpoints::UPDATE_PROFILE, response)
+         .await
+      {
+         Ok((bytes, _)) => bytes,
+         Err(err) if birthdate_already_locked(&err.to_string()) => return Ok(()),
+         Err(err) => return Err(err),
+      };
+      if birthdate_write_rejected(&bytes) {
+         return Err(Error::Internal(
+            "update_profile rejected the adult birthdate".into(),
          ));
       }
       Ok(())
@@ -232,4 +294,34 @@ impl ApiClient {
       }
       Ok(headers)
    }
+}
+
+fn birthdate_already_locked(message: &str) -> bool {
+   let lower = message.to_ascii_lowercase();
+   lower.contains("birth")
+      && (lower.contains("limited")
+         || lower.contains("already")
+         || lower.contains("cannot change")
+         || lower.contains("can't change")
+         || lower.contains("can not change"))
+}
+
+fn birthdate_write_rejected(body: &[u8]) -> bool {
+   #[derive(Deserialize)]
+   struct ApiErrors {
+      errors: Option<Vec<ApiError>>,
+   }
+   #[derive(Deserialize)]
+   struct ApiError {
+      message: Option<String>,
+   }
+   let Ok(parsed) = serde_json::from_slice::<ApiErrors>(body) else {
+      return false;
+   };
+   parsed.errors.into_iter().flatten().any(|err| {
+      err
+         .message
+         .as_deref()
+         .is_some_and(|msg| !birthdate_already_locked(msg))
+   })
 }

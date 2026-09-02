@@ -115,9 +115,21 @@ pub fn render_profile_page(
    prefs: &Prefs,
    tab: TimelineKind,
    timeline_content: &Markup,
+   view: &str,
 ) -> Markup {
    let hide_banner = prefs.hide_banner;
    let sticky = prefs.sticky_profile;
+   let is_gallery = tab == TimelineKind::Media && view == "gallery";
+   let tabs_class = if is_gallery {
+      "profile-tabs media-only"
+   } else {
+      "profile-tabs"
+   };
+   let container_class = if is_gallery {
+      "timeline-container media-only"
+   } else {
+      "timeline-container"
+   };
    let profile_tab_class = if sticky {
       "profile-tab sticky"
    } else {
@@ -125,27 +137,28 @@ pub fn render_profile_page(
    };
 
    html! {
-       div class="profile-tabs" {
-           // Left sidebar
-           div class=(profile_tab_class) {
-               div class="profile-header" {
-                   @if !hide_banner {
-                       div class="profile-banner" {
-                           (render_banner(&user.banner, config))
+       div class=(tabs_class) {
+           @if !is_gallery {
+               div class=(profile_tab_class) {
+                   div class="profile-header" {
+                       @if !hide_banner {
+                           div class="profile-banner" {
+                               (render_banner(&user.banner, config))
+                           }
                        }
+                       (render_user_card(user, config, Some(prefs)))
                    }
-                   (render_user_card(user, config, Some(prefs)))
-               }
 
-               // Photo rail on the left sidebar
-               @if !photo_rail.is_empty() {
-                   (render_photo_rail(photo_rail, user, config))
+                   @if !photo_rail.is_empty() {
+                       (render_photo_rail(photo_rail, user, config))
+                   }
                }
            }
 
-           // Main content area
-           div class="timeline-container" {
-               (render_timeline_tabs(tab, &user.username))
+           div class=(container_class) {
+               @if !is_gallery {
+                   (render_timeline_tabs(tab, &user.username))
+               }
                (timeline_content)
            }
        }

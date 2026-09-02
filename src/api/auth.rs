@@ -495,10 +495,9 @@ impl SessionPool {
             if slot.credentials.kind != SessionKind::Cookie {
                return None;
             }
-            if limits
-               .get(&slot.credentials.id)
-               .is_some_and(|session_limits| session_limits.filters_cleared)
-            {
+            if limits.get(&slot.credentials.id).is_some_and(|session_limits| {
+               session_limits.filters_cleared && session_limits.age_gate_cleared
+            }) {
                return None;
             }
             Some(slot.credentials.id)
@@ -542,11 +541,13 @@ impl SessionPool {
    }
 
    /// Remember that this session already had sensitive-content filters turned
-   /// off, so a restart does not spend the same writes again.
+   /// off and an adult birthdate written, so a restart does not spend the same
+   /// writes again.
    pub async fn mark_filters_cleared(&self, session_id: i64) {
       let mut limits = self.limits.write().await;
       if let Some(lim) = limits.get_mut(&session_id) {
          lim.filters_cleared = true;
+         lim.age_gate_cleared = true;
       }
       drop(limits);
       self.persist_now().await;

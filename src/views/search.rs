@@ -3,7 +3,10 @@ use maud::{
    html,
 };
 
-use super::tweet::TweetRenderer;
+use super::timeline::{
+   render_media_view_tabs,
+   render_timeline_with_view,
+};
 use crate::{
    config::Config,
    types::{
@@ -20,20 +23,21 @@ use crate::{
 
 /// Search pagination URL. The Twitter cursor is opaque and must be encoded —
 /// raw `+` / `=` in the query string get treated as form syntax and break paging.
-fn search_page_url(query: &str, tab: &str, cursor: Option<&str>) -> String {
-   let mut url = format!("/search?q={}", formatters::url_encode(query));
-   match tab {
-      "users" | "top" | "media" => {
-         url.push_str("&f=");
-         url.push_str(tab);
-      },
-      _ => {},
+fn search_page_url(query: &str, tab: &str, cursor: Option<&str>, view: &str) -> String {
+   let mut url = format!("/search?q={}&f={tab}", formatters::url_encode(query));
+   if tab == "media" && !view.is_empty() && view != "timeline" {
+      url.push_str("&view=");
+      url.push_str(view);
    }
    if let Some(cursor) = cursor {
       url.push_str("&cursor=");
       url.push_str(&formatters::url_encode(cursor));
    }
    url
+}
+
+fn search_tab_url(query: &str, tab: &str, view: &str) -> String {
+   search_page_url(query, tab, None, view)
 }
 
 /// Render the empty search page (home search bar).
@@ -74,43 +78,40 @@ pub fn render_search_results_with_prefs(
    filters: Option<&SearchFilters>,
    newer_url: Option<&str>,
    active_tab: &str,
+   view: &str,
 ) -> Markup {
+   let groups: Vec<Tweets> = tweets.iter().cloned().map(|tweet| vec![tweet]).collect();
+   let base_url = search_tab_url(query, active_tab, view);
+   let container_class = if active_tab == "media" && view == "gallery" {
+      "timeline-container search-results media-only"
+   } else {
+      "timeline-container search-results"
+   };
+   let defaults = Prefs::default();
+   let prefs = prefs.unwrap_or(&defaults);
+   let media_view = if active_tab == "media" { view } else { "" };
+
    html! {
-       div class="timeline-container search-results" {
+       div class=(container_class) {
            div class="timeline-header" {
-               (render_search_panel_with_action(query, filters, "/search"))
+               (render_search_panel_with_action(query, filters, "/search", active_tab, view))
            }
 
-           (render_search_tabs(query, active_tab))
+           (render_search_tabs(query, active_tab, view))
 
-           div class="timeline" {
-               // "Load newest" link when viewing paginated results
-               @if let Some(url) = newer_url {
-                   div class="timeline-item show-more" {
-                       a href=(url) { "Load newest" }
-                   }
-               }
-
-               @if tweets.is_empty() {
-                   div class="search-empty" { "No posts found" }
-               } @else {
-                   @for tweet in tweets {
-                       (TweetRenderer::new(tweet, config, false).maybe_prefs(prefs).render())
-                   }
-
-                   @if let Some(cur) = cursor {
-                       div class="show-more" {
-                           a href=(search_page_url(query, active_tab, Some(cur))) {
-                               "Load more"
-                           }
-                       }
-                   } @else {
-                       div class="timeline-footer" {
-                           h2 class="timeline-end" { "No more items" }
-                       }
-                   }
-               }
+           @if active_tab == "media" {
+               (render_media_view_tabs(&search_tab_url(query, "media", ""), view))
            }
+
+           (render_timeline_with_view(
+               &groups,
+               config,
+               cursor,
+               Some(&base_url),
+               prefs,
+               newer_url,
+               media_view,
+           ))
        }
    }
 }
@@ -136,10 +137,9 @@ pub fn render_user_search_results(
                }
            }
 
-           (render_search_tabs(query, "users"))
+           (render_search_tabs(query, "users", ""))
 
            div class="timeline" {
-               // "Load newest" link when viewing paginated results
                @if let Some(url) = newer_url {
                    div class="timeline-item show-more" {
                        a href=(url) { "Load newest" }
@@ -147,7 +147,9 @@ pub fn render_user_search_results(
                }
 
                @if users.is_empty() {
-                   div class="search-empty" { "No people found" }
+                   div class="timeline-header" {
+                       h2 class="timeline-none" { "No items found" }
+                   }
                } @else {
                    @for user in users {
                        (render_user(user, config, prefs))
@@ -155,7 +157,7 @@ pub fn render_user_search_results(
 
                    @if let Some(cur) = cursor {
                        div class="show-more" {
-                           a href=(search_page_url(query, "users", Some(cur))) {
+                           a href=(search_page_url(query, "users", Some(cur), "")) {
                                "Load more"
                            }
                        }
@@ -171,25 +173,16 @@ pub fn render_user_search_results(
 }
 
 /// Render search tabs (Top / Latest / Media / Users).
-fn render_search_tabs(query: &str, active: &str) -> Markup {
-   let encoded_query = formatters::url_encode(query);
-   let tabs: &[(&str, &str, &str)] = &[
-      ("top", "Top", &format!("/search?q={encoded_query}&f=top")),
-      ("tweets", "Latest", &format!("/search?q={encoded_query}")),
-      (
-         "media",
-         "Media",
-         &format!("/search?q={encoded_query}&f=media"),
-      ),
-      (
-         "users",
-         "Users",
-         &format!("/search?q={encoded_query}&f=users"),
-      ),
+fn render_search_tabs(query: &str, active: &str, view: &str) -> Markup {
+   let tabs: &[(&str, &str, String)] = &[
+      ("top", "Top", search_tab_url(query, "top", "")),
+      ("tweets", "Latest", search_tab_url(query, "tweets", "")),
+      ("media", "Media", search_tab_url(query, "media", view)),
+      ("users", "Users", search_tab_url(query, "users", "")),
    ];
    html! {
        ul class="tab" {
-           @for &(id, label, href) in tabs {
+           @for &(id, label, ref href) in tabs {
                li class=(if active == id { "tab-item active" } else { "tab-item" }) {
                    a href=(href) { (label) }
                }
@@ -247,14 +240,24 @@ pub fn render_search_panel_with_action(
    query: &str,
    filters: Option<&SearchFilters>,
    action: &str,
+   active_tab: &str,
+   view: &str,
 ) -> Markup {
    let default_filters = SearchFilters::default();
    let filt = filters.unwrap_or(&default_filters);
    let is_open = filt.is_panel_open();
+   let filter_kind = if active_tab.is_empty() {
+      "tweets"
+   } else {
+      active_tab
+   };
 
    html! {
        form method="get" action=(action) class="search-field" autocomplete="off" {
-           input type="hidden" name="f" value="tweets";
+           input type="hidden" name="f" value=(filter_kind);
+           @if filter_kind == "media" && !view.is_empty() && view != "timeline" {
+               input type="hidden" name="view" value=(view);
+           }
            div class="pref-group pref-input pref-inline" {
                label for="search-query" class="sr-only" { "Search" }
                input id="search-query" type="text" name="q" value=(query) placeholder="Enter search...";
@@ -284,12 +287,14 @@ pub fn render_search_panel_with_action(
                                (gen_search_checkbox(&format!("{pfx}-images"), "Images", if *prefix == "filter" { filt.images } else { false }))
                                (gen_search_checkbox(&format!("{pfx}-quote"), "Quotes", if *prefix == "filter" { filt.quote } else { false }))
                                (gen_search_checkbox(&format!("{pfx}-spaces"), "Spaces", false))
+                               @if *prefix == "filter" {
+                                   (gen_search_checkbox("f-verified", "Verified", filt.verified))
+                               }
                            }
                        }
                    }
                }
 
-               // Date range and min likes
                div class="search-row" {
                    div {
                        span class="search-title" { "Time range" }
