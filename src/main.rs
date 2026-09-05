@@ -188,6 +188,7 @@ async fn main() -> eyre::Result<()> {
         .route_service("/sitemap.xml", ServeFile::new(format!("{static_dir}/sitemap.xml")))
         .route_service("/opensearch.xml", ServeFile::new(format!("{static_dir}/opensearch.xml")))
         .layer(middleware::from_fn(routes::prefs_middleware))
+        .layer(middleware::from_fn(routes::snowflake_guard))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             routes::client_middleware,

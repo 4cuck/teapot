@@ -5,6 +5,7 @@ use std::net::SocketAddr;
 use axum::{
    extract::{
       ConnectInfo,
+      Path,
       Request,
       State,
    },
@@ -31,8 +32,29 @@ use time::Duration;
 use crate::{
    AppState,
    api::budget,
+   error::Error,
    types::Prefs,
 };
+
+/// Refuse any route whose `{id}` cannot be a snowflake before a handler spends
+/// cookies, prefs or a session on it.
+pub async fn snowflake_guard(
+   params: Option<Path<Vec<(String, String)>>>,
+   request: Request,
+   next: Next,
+) -> Response {
+   let bad_id = params
+      .as_ref()
+      .and_then(|path| path.0.iter().find(|pair| pair.0 == "id"))
+      .is_some_and(|pair| {
+         let id = &pair.1;
+         !(1..=19).contains(&id.len()) || !id.bytes().all(|byte| byte.is_ascii_digit())
+      });
+   if bad_id {
+      return Error::InvalidUrl("Invalid id".into()).into_response();
+   }
+   next.run(request).await
+}
 
 /// Bind the caller to the request so the API client can bill upstream calls to
 /// it without every route having to thread it through.
@@ -163,7 +185,10 @@ mod tests {
    use http_body_util::BodyExt as _;
    use tower::ServiceExt as _;
 
-   use super::prefs_middleware;
+   use super::{
+      prefs_middleware,
+      snowflake_guard,
+   };
 
    async fn preference_value(jar: CookieJar) -> impl IntoResponse {
       jar.get("mp4Playback")
@@ -190,5 +215,41 @@ mod tests {
       assert!(response.headers().get(header::SET_COOKIE).is_none());
       let body = response.into_body().collect().await.unwrap().to_bytes();
       assert_eq!(body, "on");
+   }
+
+   #[tokio::test]
+   async fn snowflake_guard_rejects_a_non_numeric_id() {
+      let app = Router::new()
+         .route("/i/status/{id}", get(|| async { "ok" }))
+         .layer(middleware::from_fn(snowflake_guard));
+      let response = app
+         .oneshot(
+            Request::builder()
+               .uri("/i/status/nope")
+               .body(Body::empty())
+               .unwrap(),
+         )
+         .await
+         .unwrap();
+
+      assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+   }
+
+   #[tokio::test]
+   async fn snowflake_guard_allows_a_numeric_id() {
+      let app = Router::new()
+         .route("/i/status/{id}", get(|| async { "ok" }))
+         .layer(middleware::from_fn(snowflake_guard));
+      let response = app
+         .oneshot(
+            Request::builder()
+               .uri("/i/status/20")
+               .body(Body::empty())
+               .unwrap(),
+         )
+         .await
+         .unwrap();
+
+      assert_eq!(response.status(), StatusCode::OK);
    }
 }
