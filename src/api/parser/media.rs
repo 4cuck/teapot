@@ -22,7 +22,7 @@ pub struct ParsedMedia {
    pub photos:            Vec<Photo>,
    pub video:             Option<Video>,
    pub additional_videos: Vec<Video>,
-   pub gif:               Option<Gif>,
+   pub gifs:              Vec<Gif>,
    pub attribution:       Option<User>,
    /// t.co and expanded URLs that should be stripped from tweet text.
    pub strip_urls:        Vec<String>,
@@ -36,7 +36,7 @@ pub fn parse_media(legacy: &TweetLegacy) -> ParsedMedia {
    let mut photos = Vec::new();
    let mut video = None;
    let mut additional_videos = Vec::new();
-   let mut gif = None;
+   let mut gifs = Vec::new();
    let mut attribution = None;
    let mut strip_urls = Vec::new();
 
@@ -69,7 +69,7 @@ pub fn parse_media(legacy: &TweetLegacy) -> ParsedMedia {
             }
          },
          MediaType::AnimatedGif => {
-            gif = Some(parse_gif(media));
+            gifs.push(parse_gif(media));
          },
          _ => {},
       }
@@ -89,7 +89,7 @@ pub fn parse_media(legacy: &TweetLegacy) -> ParsedMedia {
       photos,
       video,
       additional_videos,
-      gif,
+      gifs,
       attribution,
       strip_urls,
    }

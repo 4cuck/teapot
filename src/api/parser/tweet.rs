@@ -125,7 +125,7 @@ impl TryFrom<&TweetData> for Tweet {
       let mut photos = media.photos;
       let video = media.video;
       let additional_videos = media.additional_videos;
-      let gif = media.gif;
+      let gifs = media.gifs;
       let media_attribution = media.attribution;
 
       // Strip media URLs from tweet text
@@ -535,7 +535,7 @@ impl TryFrom<&TweetData> for Tweet {
          quote,
          card,
          poll,
-         gif,
+         gifs,
          video,
          additional_videos,
          photos,
