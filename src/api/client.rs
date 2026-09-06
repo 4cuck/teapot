@@ -586,6 +586,11 @@ impl ApiClient {
    }
 
    /// Inner implementation of [`graphql_request`].
+   ///
+   /// A bodyless 404 is how X refuses a client transaction ID it will not
+   /// accept, and it answers the same request without one, so the ID is
+   /// dropped and the call repeated on this session before the caller burns a
+   /// second account on it.
    async fn graphql_request_inner<T>(
       &self,
       session: &SessionLease,
@@ -593,6 +598,43 @@ impl ApiClient {
       variables: &str,
       features: &str,
       field_toggles: Option<&str>,
+   ) -> Result<T>
+   where
+      T: DeserializeOwned,
+   {
+      let sent_tid = self.tid_enabled && session.kind == SessionKind::Cookie;
+      let first = self
+         .graphql_attempt(session, endpoint, variables, features, field_toggles, true)
+         .await;
+      if !sent_tid || !matches!(first, Err(Error::TransientUpstream)) {
+         return first;
+      }
+
+      self
+         .tid
+         .note_refused("GET", &format!("/i/api/graphql/{endpoint}"))
+         .await;
+      let retried = self
+         .graphql_attempt(session, endpoint, variables, features, field_toggles, false)
+         .await;
+      if let Err(ref err) = retried {
+         tracing::warn!(
+            session_id = session.id,
+            endpoint,
+            "no answer from X with or without a transaction id: {err}"
+         );
+      }
+      retried
+   }
+
+   async fn graphql_attempt<T>(
+      &self,
+      session: &SessionLease,
+      endpoint: &str,
+      variables: &str,
+      features: &str,
+      field_toggles: Option<&str>,
+      with_tid: bool,
    ) -> Result<T>
    where
       T: DeserializeOwned,
@@ -620,6 +662,7 @@ impl ApiClient {
             variables,
             features,
             field_toggles,
+            with_tid,
          )
          .await?;
 
@@ -727,14 +770,20 @@ impl ApiClient {
          // Empty or HTML 404s are X/WAF blips, not a missing tweet or user.
          // JSON 404s can still be a real gone resource.
          if status.as_u16() == 404 {
+            if body.trim().is_empty() || serde_json::from_str::<serde_json::Value>(&body).is_err() {
+               tracing::debug!(
+                  session_id = session.id,
+                  session_user = %session.username,
+                  endpoint,
+                  "bodyless 404, retrying without a transaction id"
+               );
+               return Err(Error::TransientUpstream);
+            }
             tracing::warn!(
                session_id = session.id,
                session_user = %session.username,
                "API 404: {body}"
             );
-            if body.trim().is_empty() || serde_json::from_str::<serde_json::Value>(&body).is_err() {
-               return Err(Error::TransientUpstream);
-            }
             if let Err(err) = Self::check_api_errors(body.as_bytes()) {
                return Err(err);
             }
@@ -769,6 +818,7 @@ impl ApiClient {
       variables: &str,
       features: &str,
       field_toggles: Option<&str>,
+      with_tid: bool,
    ) -> Result<header::HeaderMap> {
       let mut headers = header::HeaderMap::new();
 
@@ -795,7 +845,11 @@ impl ApiClient {
          },
          SessionKind::Cookie => {
             let api_path = format!("/i/api/graphql/{endpoint}");
-            let (bearer, tid) = self.bearer_and_tid(&api_path).await;
+            let (bearer, tid) = if with_tid {
+               self.bearer_and_tid(&api_path).await
+            } else {
+               (endpoints::BEARER_TOKEN_NO_TID, None)
+            };
 
             headers.insert(
                header::AUTHORIZATION,

@@ -6,6 +6,7 @@
 //! in `UserTweetsAndReplies`).
 
 use std::{
+   collections::HashMap,
    sync::Arc,
    time::{
       Duration,
@@ -36,6 +37,7 @@ pub struct TidClient {
    http:       HttpClient,
    sessions:   SessionPool,
    last_fetch: Arc<Mutex<Instant>>,
+   refused:    Arc<RwLock<HashMap<String, Instant>>>,
 }
 
 /// How often to refresh the TID client.
@@ -43,6 +45,11 @@ const REFRESH_INTERVAL: Duration = Duration::from_hours(1);
 
 /// How long to wait before retrying a failed bootstrap.
 const RETRY_INTERVAL: Duration = Duration::from_mins(5);
+
+/// How long an endpoint keeps being asked without a transaction ID after X
+/// refused one. Short enough that the endpoint recovers on its own once X
+/// starts accepting IDs again.
+const REFUSAL_INTERVAL: Duration = Duration::from_mins(10);
 
 impl TidClient {
    pub fn new(http: HttpClient, sessions: SessionPool) -> Self {
@@ -53,6 +60,7 @@ impl TidClient {
          last_fetch: Arc::new(Mutex::new(
             Instant::now().checked_sub(REFRESH_INTERVAL).unwrap(),
          )),
+         refused: Arc::new(RwLock::new(HashMap::new())),
       }
    }
 
@@ -65,11 +73,43 @@ impl TidClient {
    /// Same as [`Self::generate`], with an explicit HTTP method. X hashes the
    /// method into the transaction ID, so POSTs must not reuse the GET variant.
    pub async fn generate_for(&self, method: &str, path: &str) -> Option<String> {
+      if self.is_refused(method, path).await {
+         return None;
+      }
       self.ensure_fresh().await;
       let guard = self.inner.read().await;
       guard
          .as_ref()
          .map(|ct| ct.generate_transaction_id(method, path))
+   }
+
+   /// Record that X answered this request with a bodyless 404, which is how it
+   /// refuses a transaction ID it will not accept.
+   pub async fn note_refused(&self, method: &str, path: &str) {
+      self
+         .refused
+         .write()
+         .await
+         .insert(Self::refusal_key(method, path), Instant::now());
+   }
+
+   async fn is_refused(&self, method: &str, path: &str) -> bool {
+      let key = Self::refusal_key(method, path);
+      let fresh = self
+         .refused
+         .read()
+         .await
+         .get(&key)
+         .is_some_and(|at| at.elapsed() < REFUSAL_INTERVAL);
+      if !fresh {
+         // Expired entries are dropped here so the map cannot grow forever.
+         self.refused.write().await.remove(&key);
+      }
+      fresh
+   }
+
+   fn refusal_key(method: &str, path: &str) -> String {
+      format!("{method} {path}")
    }
 
    /// Refresh the TID client if stale. Uses `try_lock` so only one task
