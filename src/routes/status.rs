@@ -205,14 +205,21 @@ async fn status(
             if conversation.replies.content.is_empty() {
                return Ok(StatusCode::NO_CONTENT.into_response());
             }
-            let content = render_reply_chains(
-               &conversation.replies.content,
-               conversation.replies.bottom.as_deref().unwrap_or_default(),
-               &username,
-               &id,
-               &state.config,
-               &prefs,
-            );
+            // infiniteScroll.js picks replies out of the fragment with
+            // `.replies > div`, so the fragment needs the same wrapper the page
+            // has or nothing it loads is ever shown.
+            let content = html! {
+                div class="replies" {
+                    (render_reply_chains(
+                        &conversation.replies.content,
+                        conversation.replies.bottom.as_deref().unwrap_or_default(),
+                        &username,
+                        &id,
+                        &state.config,
+                        &prefs,
+                    ))
+                }
+            };
             return Ok(Html(content.into_string()).into_response());
          }
 
