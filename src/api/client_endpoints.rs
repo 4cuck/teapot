@@ -17,13 +17,13 @@ use super::{
    EditHistory,
    EditHistoryData,
    Error,
-   GalleryPhoto,
    List,
    ListByIdData,
    ListBySlugData,
    ListMembersData,
    ListTimelineData,
    PaginatedResult,
+   PhotoRail,
    Profile,
    Result,
    RetweetersData,
@@ -49,19 +49,34 @@ use super::{
    timeout,
 };
 
-fn profile_from_parts(user: User, tweets: Timeline, photo_rail: Vec<GalleryPhoto>) -> Profile {
+/// Where a profile's photo rail comes from.
+enum Rail {
+   /// Cut from a media page the caller already had, so nothing is fetched.
+   Given(PhotoRail),
+   /// Fetched here; the page comes back on the profile for the caller to keep.
+   Fetched(Result<Timeline>),
+   None,
+}
+
+fn profile_from_parts(user: User, tweets: Timeline, rail: Rail) -> Profile {
    let pinned = tweets
       .content
       .iter()
       .flatten()
       .find(|tweet| user.pinned_tweet > 0 && tweet.id == user.pinned_tweet)
       .cloned();
+   let (photo_rail, media) = match rail {
+      Rail::Given(photo_rail) => (photo_rail, None),
+      Rail::Fetched(Ok(media)) => (media.photo_rail(), Some(media)),
+      Rail::Fetched(Err(_)) | Rail::None => (Vec::new(), None),
+   };
 
    Profile {
       user,
       photo_rail,
       pinned,
       tweets,
+      media,
    }
 }
 
@@ -361,13 +376,18 @@ impl ApiClient {
          )
          .await?;
       let mut conversation = parser::parse_conversation(&data, tweet_id, cursor.is_some())?;
+      let mut article_attached = false;
       if cursor.is_none()
          && let Some(tweet_data) = article_tweet_data(&data, tweet_id)
          && let Ok(article) = parser::parse_article(tweet_data)
       {
          parser::attach_article_preview(&mut conversation.tweet, &article);
+         article_attached = true;
       }
+      // The article normally rides along in the detail response above; a second
+      // `TweetDetail` for the same id is only worth its round trip when it did not.
       if cursor.is_none()
+         && !article_attached
          && conversation
             .tweet
             .entities
@@ -439,16 +459,22 @@ impl ApiClient {
 
    /// Get user's profile with tweets.
    pub async fn get_profile(&self, screen_name: &str, cursor: Option<&str>) -> Result<Profile> {
-      self.get_profile_hinted(screen_name, cursor, None).await
+      self.get_profile_hinted(screen_name, cursor, None, None).await
    }
 
    /// Same as [`get_profile`], but a known user (or id stub) lets tweets and
    /// the photo rail start in the same wave as `UserByScreenName`.
+   ///
+   /// A `rail` the caller already has (cut from a cached media page) saves the
+   /// `UserMedia` call a first page otherwise spends on ten thumbnails. When
+   /// the call is made, the media page comes back in [`Profile::media`] so the
+   /// caller can serve the media tab from it.
    pub async fn get_profile_hinted(
       &self,
       screen_name: &str,
       cursor: Option<&str>,
       known: Option<&User>,
+      rail: Option<PhotoRail>,
    ) -> Result<Profile> {
       let known_id = known
          .map(|user| user.id.as_str())
@@ -456,10 +482,10 @@ impl ApiClient {
 
       if let Some(id) = known_id {
          if cursor.is_none() {
-            let (user_res, tweets_res, rail_res) = tokio::join!(
+            let (user_res, tweets_res, rail) = tokio::join!(
                self.get_user(screen_name),
                self.get_user_tweets(id, None),
-               self.get_photo_rail(id)
+               self.rail_for(id, rail)
             );
             let user = match user_res {
                Ok(user) => user,
@@ -476,11 +502,7 @@ impl ApiClient {
                   ..Profile::default()
                });
             }
-            return Ok(profile_from_parts(
-               user,
-               tweets_res?,
-               rail_res.unwrap_or_default(),
-            ));
+            return Ok(profile_from_parts(user, tweets_res?, rail));
          }
 
          let user = if let Some(user) = known.filter(|user| !user.fullname.is_empty()) {
@@ -497,7 +519,7 @@ impl ApiClient {
          return Ok(profile_from_parts(
             user,
             self.get_user_tweets(id, cursor).await?,
-            Vec::new(),
+            Rail::None,
          ));
       }
 
@@ -509,15 +531,22 @@ impl ApiClient {
          });
       }
 
-      let (tweets, photo_rail) = if cursor.is_none() {
-         let (tweets_result, photo_rail_result) =
-            tokio::join!(self.get_user_tweets(&user.id, None), self.get_photo_rail(&user.id));
-         (tweets_result?, photo_rail_result.unwrap_or_default())
+      let (tweets, rail) = if cursor.is_none() {
+         let (tweets_result, rail) =
+            tokio::join!(self.get_user_tweets(&user.id, None), self.rail_for(&user.id, rail));
+         (tweets_result?, rail)
       } else {
-         (self.get_user_tweets(&user.id, cursor).await?, Vec::new())
+         (self.get_user_tweets(&user.id, cursor).await?, Rail::None)
       };
 
-      Ok(profile_from_parts(user, tweets, photo_rail))
+      Ok(profile_from_parts(user, tweets, rail))
+   }
+
+   async fn rail_for(&self, user_id: &str, given: Option<PhotoRail>) -> Rail {
+      match given {
+         Some(rail) => Rail::Given(rail),
+         None => Rail::Fetched(self.get_user_media(user_id, None).await),
+      }
    }
 
    /// Search tweets.
@@ -780,7 +809,7 @@ impl ApiClient {
 
       let response = self
          .client
-         .get_on(&url, &headers, self.proxy_for(&session).as_ref())
+         .get_on(&url, &headers, Some(&self.egress_for(&session)))
          .await?;
       let (bytes, _) = self
          .account_response(&session, endpoints::STRATO_TRANSLATE, response)
@@ -815,16 +844,6 @@ impl ApiClient {
 
    /// Translate a tweet using Kagi Translate API.
    pub async fn kagi_translate(&self, tweet: &Tweet, kagi_token: &str) -> Result<Translation> {
-      use http_body_util::{
-         BodyExt as _,
-         Full,
-         Limited,
-      };
-      use hyper_rustls::HttpsConnectorBuilder;
-      use hyper_util::{
-         client::legacy::Client as LegacyClient,
-         rt::TokioExecutor,
-      };
       use percent_encoding::{
          NON_ALPHANUMERIC,
          utf8_percent_encode,
@@ -858,40 +877,22 @@ impl ApiClient {
          utf8_percent_encode(kagi_token, NON_ALPHANUMERIC)
       );
 
-      let request_body = payload.to_string();
-      let uri: hyper::Uri = url
-         .parse()
-         .map_err(|err| Error::Internal(format!("invalid Kagi URL: {err}")))?;
-
-      let connector = HttpsConnectorBuilder::new()
-         .with_native_roots()
-         .map_err(|err| Error::Internal(format!("TLS setup error: {err}")))?
-         .https_only()
-         .enable_http1()
-         .build();
-
-      let client = LegacyClient::builder(TokioExecutor::new()).build(connector);
-
-      let request = hyper::Request::builder()
-         .method(hyper::Method::POST)
-         .uri(&uri)
-         .header(header::HOST, "translate.kagi.com")
-         .header(header::CONTENT_TYPE, "application/json")
-         .body(Full::new(bytes::Bytes::from(request_body)))
-         .map_err(|err| Error::Internal(format!("build Kagi request: {err}")))?;
-
-      let resp = timeout(Duration::from_secs(30), client.request(request))
+      let mut headers = header::HeaderMap::new();
+      headers.insert(
+         header::CONTENT_TYPE,
+         header::HeaderValue::from_static("application/json"),
+      );
+      let resp = self
+         .client
+         .post_with_headers(&url, &headers, bytes::Bytes::from(payload.to_string()))
          .await
-         .map_err(|_| Error::Internal("Kagi request timed out".into()))?
          .map_err(|err| Error::Internal(format!("Kagi request failed: {err}")))?;
 
       let status = resp.status();
-      let response_body = Limited::new(resp.into_body(), 1024 * 1024);
-      let body_bytes = timeout(Duration::from_secs(30), response_body.collect())
+      let body_bytes = resp
+         .bytes_limited(1024 * 1024)
          .await
-         .map_err(|_| Error::Internal("Kagi response body timed out".into()))?
-         .map_err(|err| Error::Internal(format!("Kagi body read error: {err}")))?
-         .to_bytes();
+         .map_err(|err| Error::Internal(format!("Kagi body read error: {err}")))?;
 
       if !status.is_success() {
          let body_text = String::from_utf8_lossy(&body_bytes);
@@ -938,40 +939,5 @@ impl ApiClient {
    /// Get detailed session debug info.
    pub async fn get_session_debug(&self) -> super::super::DebugResponse {
       self.sessions.get_debug().await
-   }
-
-   /// Get photo rail (up to 16 recent photos) for a user.
-   pub async fn get_photo_rail(&self, user_id: &str) -> Result<Vec<GalleryPhoto>> {
-      let timeline = self.get_user_media(user_id, None).await?;
-
-      let mut photos = Vec::new();
-      for mut tweet in timeline.content.into_iter().flatten() {
-         // Extract one photo from each tweet
-         // first photo > video thumb > gif thumb > card image
-         let url = if !tweet.photos.is_empty() {
-            Some(tweet.photos.swap_remove(0).url)
-         } else if let Some(video) = tweet.video.take() {
-            (!video.thumb.is_empty()).then_some(video.thumb)
-         } else if let Some(gif) = tweet.gifs.into_iter().next() {
-            (!gif.thumb.is_empty()).then_some(gif.thumb)
-         } else if let Some(card) = tweet.card.take() {
-            (!card.image.is_empty()).then_some(card.image)
-         } else {
-            None
-         };
-
-         if let Some(url) = url {
-            photos.push(GalleryPhoto {
-               url,
-               tweet_id: tweet.id.to_string(),
-               color: String::new(),
-            });
-            if photos.len() >= 10 {
-               return Ok(photos);
-            }
-         }
-      }
-
-      Ok(photos)
    }
 }

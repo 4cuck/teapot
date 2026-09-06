@@ -27,7 +27,7 @@ use axum::{
    },
    middleware,
 };
-use hyper::header;
+use axum::http::header;
 use tokio::net::TcpListener;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::{
@@ -114,12 +114,20 @@ async fn main() -> eyre::Result<()> {
       proxies = Some(pool.bind_sessions(&sessions.session_ids(), &config).await?);
    }
 
+   // Find the newest browser version per engine that X's edge accepts, so
+   // every session client built from here on presents one X will talk to.
+   api::browser::probe_accepted(proxies.as_ref().map(ProxyPool::first)).await;
+
    // Initialize API client
    let api = ApiClient::new(&config, sessions, proxies);
    api.spawn_filter_sync();
 
    // Initialize GIF transcoder if local mode
-   let http_client = HttpClient::new(&config.config.proxy, &config.config.proxy_auth);
+   let http_client = HttpClient::new(
+      &config.config.proxy,
+      &config.config.proxy_auth,
+      api::http::Purpose::Media,
+   );
    let gif_transcoder = if config.gif_transcoding.mode == GifTranscodingMode::Local {
       match GifTranscoder::new(http_client.clone(), config.gif_transcoding.clone()).await {
          Ok(transcoder) => {

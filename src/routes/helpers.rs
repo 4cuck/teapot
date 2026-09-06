@@ -36,6 +36,7 @@ use crate::{
    types::{
       AccountContext,
       Conversation,
+      PhotoRail,
       Profile,
       Timeline,
       Translation,
@@ -120,14 +121,62 @@ pub fn store_user(state: &AppState, user: &User) {
 }
 
 /// Store a first-page profile and its user.
+///
+/// A media page the profile fetched for its rail is filed under the media
+/// tab's key instead of inside the profile, so the tab opens from cache and
+/// the profile entry stays small.
 pub fn store_profile(state: &AppState, profile: &Profile) {
    store_user(state, &profile.user);
+   if let Some(ref media) = profile.media {
+      state.cache.set_swr(
+         &cache_keys::timeline(&profile.user.username, "media"),
+         media,
+         ttl::DEFAULT,
+         ttl::DEFAULT_STALE,
+      );
+   }
+   let slim = Profile {
+      media: None,
+      ..profile.clone()
+   };
    state.cache.set_swr(
       &cache_keys::profile(&profile.user.username),
-      profile,
+      &slim,
       ttl::DEFAULT,
       ttl::DEFAULT_STALE,
    );
+}
+
+/// The photo rail cut from a cached media page, so a profile view does not
+/// spend a `UserMedia` call the media tab already paid for. A stale page is
+/// fine for ten thumbnails.
+pub fn cached_photo_rail(state: &AppState, username: &str) -> Option<PhotoRail> {
+   match state
+      .cache
+      .lookup::<Timeline>(&cache_keys::timeline(username, "media"))?
+   {
+      Hit::Fresh(media) | Hit::Stale(media) => Some(media.photo_rail()),
+   }
+}
+
+/// Photo rail for a header outside the profile page (replies, user search).
+/// Reads the cached media page and otherwise fetches and files one.
+pub async fn photo_rail(state: &AppState, username: &str, user_id: &str) -> PhotoRail {
+   if let Some(rail) = cached_photo_rail(state, username) {
+      return rail;
+   }
+   match state.api.get_user_media(user_id, None).await {
+      Ok(media) => {
+         state.cache.set_swr(
+            &cache_keys::timeline(username, "media"),
+            &media,
+            ttl::DEFAULT,
+            ttl::DEFAULT_STALE,
+         );
+         media.photo_rail()
+      },
+      Err(_) => Vec::new(),
+   }
 }
 
 /// Seed id mappings from tweets already on the page so a later profile click
@@ -167,7 +216,12 @@ pub fn prefetch_profiles(state: &AppState, tweets: &[Tweet]) {
             break;
          };
          let hint = user_hint(&state, &name);
-         if let Ok(profile) = state.api.get_profile_hinted(&name, None, hint.as_ref()).await {
+         let rail = cached_photo_rail(&state, &name);
+         if let Ok(profile) = state
+            .api
+            .get_profile_hinted(&name, None, hint.as_ref(), rail)
+            .await
+         {
             store_profile(&state, &profile);
          }
          drop(permit);

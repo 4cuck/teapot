@@ -18,14 +18,16 @@ use super::{
    },
    endpoints,
    http::{
+      Egress,
       HttpClient,
-      ProxyConfig,
+      Purpose,
    },
    parser,
 };
 use crate::{
    api::schema::{
       AboutAccountData,
+      ApiError,
       AudioSpaceData,
       AudioSpaceMetadata,
       BroadcastMetadata,
@@ -55,9 +57,9 @@ use crate::{
       CardKind,
       Conversation,
       EditHistory,
-      GalleryPhoto,
       List,
       PaginatedResult,
+      PhotoRail,
       Profile,
       SessionKind,
       Timeline,
@@ -291,52 +293,40 @@ pub struct ApiClient {
 }
 
 impl ApiClient {
+   /// Identity headers (user agent, client hints, languages, encodings) come
+   /// from each session's browser profile, so none are set here.
    pub fn new(config: &Config, sessions: SessionPool, proxies: Option<ProxyPool>) -> Self {
-      let mut headers = header::HeaderMap::new();
-      headers.insert(
-         header::USER_AGENT,
-         header::HeaderValue::from_static(endpoints::USER_AGENT),
-      );
-      headers.insert(
-         header::ACCEPT_LANGUAGE,
-         header::HeaderValue::from_static("en-US,en;q=0.9"),
-      );
-      headers.insert(
-         header::ACCEPT_ENCODING,
-         header::HeaderValue::from_static("gzip"),
-      );
-      headers.insert(
-         header::CONNECTION,
-         header::HeaderValue::from_static("keep-alive"),
-      );
-
       let api_proxy = if config.config.api_proxy.is_empty() {
          &config.config.proxy
       } else {
          &config.config.api_proxy
       };
-      let mut client =
-         HttpClient::new(api_proxy, &config.config.proxy_auth).with_default_headers(headers);
+      let mut client = HttpClient::new(api_proxy, &config.config.proxy_auth, Purpose::Api);
       if api_proxy.is_empty()
          && let Some(ref pool) = proxies
       {
          client = client.with_default_proxy(pool.first());
       }
 
-      let tid = TidClient::new(client.clone(), sessions.clone());
+      let proxies = proxies.map(Arc::new);
+      let tid = TidClient::new(client.clone(), sessions.clone(), proxies.clone());
 
       Self {
          client,
          sessions,
-         proxies: proxies.map(Arc::new),
+         proxies,
          tid,
          budget: ClientBudget::new(config.config.client_budget),
          tid_enabled: !config.config.disable_tid,
       }
    }
 
-   pub(crate) fn proxy_for(&self, session: &SessionLease) -> Option<ProxyConfig> {
-      self.proxies.as_ref().map(|pool| pool.for_session(session.id))
+   /// The browser and proxy a request for this session goes out as.
+   pub(crate) fn egress_for(&self, session: &SessionLease) -> Egress {
+      Egress {
+         session: session.id,
+         proxy:   self.proxies.as_ref().map(|pool| pool.for_session(session.id)),
+      }
    }
 
    pub(crate) async fn bearer_and_tid(&self, api_path: &str) -> (&'static str, Option<String>) {
@@ -370,23 +360,26 @@ impl ApiClient {
    }
 
    /// Check for API-level errors in the raw response bytes.
+   ///
+   /// For the GraphQL path the envelope is parsed once and its `errors` go
+   /// through [`map_api_errors`](Self::map_api_errors) directly; this is for
+   /// bodies that are only ever inspected for an error.
    fn check_api_errors(bytes: &[u8]) -> Result<()> {
       #[derive(Deserialize)]
       struct ErrorCheck {
-         errors: Option<Vec<ApiError>>,
-      }
-      #[derive(Deserialize)]
-      struct ApiError {
          #[serde(default)]
-         code:    i64,
-         #[serde(default)]
-         message: String,
+         errors: Vec<ApiError>,
       }
 
       let Ok(check) = serde_json::from_slice::<ErrorCheck>(bytes) else {
          return Ok(());
       };
-      let Some(error) = check.errors.as_ref().and_then(|errs| errs.first()) else {
+      Self::map_api_errors(&check.errors)
+   }
+
+   /// Turn the first of X's `errors` into the matching [`Error`].
+   fn map_api_errors(errors: &[ApiError]) -> Result<()> {
+      let Some(error) = errors.first() else {
          return Ok(());
       };
 
@@ -668,14 +661,25 @@ impl ApiClient {
 
       let response = self
          .client
-         .get_on(&url, &headers, self.proxy_for(session).as_ref())
+         .get_on(&url, &headers, Some(&self.egress_for(session)))
          .await?;
       let (bytes, limit_recorded) = self.account_response(session, endpoint, response).await?;
 
-      // Check for API errors before full deserialization.
+      // One pass over a body that can run to several megabytes: the envelope
+      // carries `errors` beside `data`, so the error check no longer costs a
+      // second full tokenisation. If X's error document does not fit the
+      // envelope, the cheap error-only parse still names the failure.
+      let resp = match serde_json::from_slice::<GqlResponse<T>>(&bytes) {
+         Ok(resp) => resp,
+         Err(err) => {
+            Self::check_api_errors(&bytes)?;
+            return Err(Error::Internal(format!("Response parse error: {err}")));
+         },
+      };
+
       // Mark the session as limited on token errors so the retry picks
       // a different one.
-      let api_check = Self::check_api_errors(&bytes);
+      let api_check = Self::map_api_errors(&resp.errors);
       if let Err(Error::SessionRejected(ref msg)) = api_check {
          self.sessions.mark_rejected(session.id).await;
          return Err(Error::SessionRejected(msg.clone()));
@@ -688,9 +692,9 @@ impl ApiClient {
       }
       api_check?;
 
-      let resp = serde_json::from_slice::<GqlResponse<T>>(&bytes)
-         .map_err(|err| Error::Internal(format!("Response parse error: {err}")))?;
-      Ok(resp.data)
+      resp
+         .data
+         .ok_or_else(|| Error::Internal("Response parse error: missing data".into()))
    }
 
    /// Every authenticated call to X goes through here, or its 429s and refused
@@ -881,23 +885,8 @@ impl ApiClient {
                header::CONTENT_TYPE,
                header::HeaderValue::from_static("application/json"),
             );
-            headers.insert(
-               "sec-ch-ua",
-               header::HeaderValue::from_static(
-                  r#""Google Chrome";v="142", "Chromium";v="142", "Not A(Brand";v="24""#,
-               ),
-            );
-            headers.insert("sec-ch-ua-mobile", header::HeaderValue::from_static("?0"));
-            headers.insert(
-               "sec-ch-ua-platform",
-               header::HeaderValue::from_static("\"Windows\""),
-            );
-            headers.insert("sec-fetch-dest", header::HeaderValue::from_static("empty"));
-            headers.insert("sec-fetch-mode", header::HeaderValue::from_static("cors"));
-            headers.insert(
-               "sec-fetch-site",
-               header::HeaderValue::from_static("same-site"),
-            );
+            // Client hints, fetch metadata and the user agent come from the
+            // session's browser profile; setting them here would contradict it.
 
             if let Some(tid) = tid
                && let Ok(val) = tid.parse()
@@ -908,7 +897,6 @@ impl ApiClient {
       }
 
       // Common headers
-      headers.insert(header::ACCEPT, header::HeaderValue::from_static("*/*"));
       headers.insert(
          "x-twitter-active-user",
          header::HeaderValue::from_static("yes"),
@@ -957,7 +945,6 @@ impl ApiClient {
          header::ORIGIN,
          header::HeaderValue::from_static("https://x.com"),
       );
-      headers.insert(header::ACCEPT, header::HeaderValue::from_static("*/*"));
       headers.insert(
          "x-twitter-active-user",
          header::HeaderValue::from_static("yes"),
@@ -974,7 +961,7 @@ impl ApiClient {
 
       let response = self
          .client
-         .get_on(url, &headers, self.proxy_for(&session).as_ref())
+         .get_on(url, &headers, Some(&self.egress_for(&session)))
          .await?;
       let (bytes, _) = self
          .account_response(&session, session_key, response)

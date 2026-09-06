@@ -553,10 +553,11 @@ impl SessionPool {
       self.persist_now().await;
    }
 
-   /// Cookie header for a cookie session, for requests that fetch x.com's web
-   /// app rather than the API. Takes no concurrency permit, since those pages
-   /// are outside the per-session API rate limits.
-   pub(crate) fn cookie_header(&self) -> Option<String> {
+   /// A cookie session's id and cookie header, for requests that fetch x.com's
+   /// web app rather than the API. Takes no concurrency permit, since those
+   /// pages are outside the per-session API rate limits. The id lets the fetch
+   /// go out as that account's browser, on its proxy.
+   pub(crate) fn cookie_header(&self) -> Option<(i64, String)> {
       self
          .sessions
          .iter()
@@ -566,7 +567,12 @@ impl SessionPool {
                && !creds.auth_token.is_empty()
                && !creds.ct0.is_empty()
          })
-         .map(|creds| format!("auth_token={}; ct0={}", creds.auth_token, creds.ct0))
+         .map(|creds| {
+            (
+               creds.id,
+               format!("auth_token={}; ct0={}", creds.auth_token, creds.ct0),
+            )
+         })
    }
 
    /// Get health statistics about the session pool.

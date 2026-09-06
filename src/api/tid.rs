@@ -25,9 +25,12 @@ use tokio::sync::{
 use xitter_txid::transaction::ClientTransaction;
 
 use super::{
+   ProxyPool,
    auth::SessionPool,
-   endpoints,
-   http::HttpClient,
+   http::{
+      Egress,
+      HttpClient,
+   },
 };
 
 /// Cached transaction ID client that refreshes periodically.
@@ -36,6 +39,7 @@ pub struct TidClient {
    inner:      Arc<RwLock<Option<ClientTransaction>>>,
    http:       HttpClient,
    sessions:   SessionPool,
+   proxies:    Option<Arc<ProxyPool>>,
    last_fetch: Arc<Mutex<Instant>>,
    refused:    Arc<RwLock<HashMap<String, Instant>>>,
 }
@@ -52,11 +56,12 @@ const RETRY_INTERVAL: Duration = Duration::from_mins(5);
 const REFUSAL_INTERVAL: Duration = Duration::from_mins(10);
 
 impl TidClient {
-   pub fn new(http: HttpClient, sessions: SessionPool) -> Self {
+   pub fn new(http: HttpClient, sessions: SessionPool, proxies: Option<Arc<ProxyPool>>) -> Self {
       Self {
          inner: Arc::new(RwLock::new(None)),
          http,
          sessions,
+         proxies,
          last_fetch: Arc::new(Mutex::new(
             Instant::now().checked_sub(REFRESH_INTERVAL).unwrap(),
          )),
@@ -95,17 +100,18 @@ impl TidClient {
 
    async fn is_refused(&self, method: &str, path: &str) -> bool {
       let key = Self::refusal_key(method, path);
-      let fresh = self
-         .refused
-         .read()
-         .await
-         .get(&key)
-         .is_some_and(|at| at.elapsed() < REFUSAL_INTERVAL);
-      if !fresh {
-         // Expired entries are dropped here so the map cannot grow forever.
-         self.refused.write().await.remove(&key);
+      let refused_at = self.refused.read().await.get(&key).copied();
+      match refused_at {
+         Some(at) if at.elapsed() < REFUSAL_INTERVAL => true,
+         Some(_) => {
+            // Expired entries are dropped here so the map cannot grow forever.
+            // Only an expired entry takes the write lock; the common case of no
+            // entry at all stays a shared read.
+            self.refused.write().await.remove(&key);
+            false
+         },
+         None => false,
       }
-      fresh
    }
 
    fn refusal_key(method: &str, path: &str) -> String {
@@ -115,6 +121,10 @@ impl TidClient {
    /// Refresh the TID client if stale. Uses `try_lock` so only one task
    /// performs the refresh. Concurrent callers skip it and use the existing
    /// (possibly stale) client.
+   ///
+   /// Only the very first caller waits for the bootstrap, since there is
+   /// nothing else to serve. Once a client exists, the hourly refresh runs in
+   /// the background so no request pays for two page fetches.
    async fn ensure_fresh(&self) {
       let Ok(mut last) = self.last_fetch.try_lock() else {
          return; // another task is already refreshing
@@ -124,9 +134,33 @@ impl TidClient {
          return;
       }
 
-      match self.fetch_client().await {
-         Ok(ct) => {
+      if self.inner.read().await.is_none() {
+         let outcome = self.fetch_client().await;
+         Self::record_refresh(&mut last, &outcome);
+         if let Ok(ct) = outcome {
             *self.inner.write().await = Some(ct);
+         }
+         return;
+      }
+
+      // Claim the window before spawning so concurrent callers do not each
+      // start a refresh; a failure rewinds it to the retry interval.
+      *last = Instant::now();
+      drop(last);
+      let this = self.clone();
+      tokio::spawn(async move {
+         let outcome = this.fetch_client().await;
+         let mut last = this.last_fetch.lock().await;
+         Self::record_refresh(&mut last, &outcome);
+         if let Ok(ct) = outcome {
+            *this.inner.write().await = Some(ct);
+         }
+      });
+   }
+
+   fn record_refresh(last: &mut Instant, outcome: &Result<ClientTransaction, String>) {
+      match outcome {
+         Ok(_) => {
             *last = Instant::now();
             tracing::info!("TID client refreshed");
          },
@@ -142,13 +176,18 @@ impl TidClient {
 
    /// Fetch the x.com homepage and ondemand JS to create a new
    /// [`ClientTransaction`].
+   ///
+   /// This is a page load, so it carries navigation fetch metadata rather than
+   /// the API client's XHR defaults, and it goes out as the browser of the
+   /// account whose cookie it uses. Client hints and user agent stay with that
+   /// browser profile.
    async fn fetch_client(&self) -> Result<ClientTransaction, String> {
       let mut headers = HeaderMap::new();
-      headers.insert(header::USER_AGENT, endpoints::USER_AGENT.parse().unwrap());
       headers.insert(
          header::ACCEPT,
          header::HeaderValue::from_static(
-            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/\
+             apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
          ),
       );
       headers.insert(
@@ -160,11 +199,17 @@ impl TidClient {
          header::HeaderValue::from_static("navigate"),
       );
       headers.insert("sec-fetch-site", header::HeaderValue::from_static("none"));
+      headers.insert("sec-fetch-user", header::HeaderValue::from_static("?1"));
+      headers.insert(
+         "upgrade-insecure-requests",
+         header::HeaderValue::from_static("1"),
+      );
+      headers.insert("priority", header::HeaderValue::from_static("u=0, i"));
 
       // Logged-out visitors get a stripped shell built from a different bundle
       // that carries no chunk manifest, so the bootstrap needs a session cookie
       // to reach the client-web app the transaction ID is derived from.
-      let cookie = self
+      let (session_id, cookie) = self
          .sessions
          .cookie_header()
          .ok_or("no cookie session available for TID bootstrap")?;
@@ -174,10 +219,17 @@ impl TidClient {
             .parse()
             .map_err(|_| "invalid cookie header value".to_owned())?,
       );
+      let egress = Egress {
+         session: session_id,
+         proxy:   self
+            .proxies
+            .as_ref()
+            .map(|pool| pool.for_session(session_id)),
+      };
 
       let home_html = self
          .http
-         .get_with_headers("https://x.com", &headers)
+         .get_on("https://x.com", &headers, Some(&egress))
          .await
          .map_err(|err| format!("fetch x.com: {err}"))?
          .text()
@@ -187,9 +239,25 @@ impl TidClient {
       let js_url = ClientTransaction::extract_ondemand_url(&home_html)
          .map_err(|err| format!("extract ondemand URL: {err}"))?;
 
+      // The script is a subresource, fetched cross-site from the CDN.
+      headers.remove(header::COOKIE);
+      headers.remove("sec-fetch-user");
+      headers.remove("upgrade-insecure-requests");
+      headers.insert(header::ACCEPT, header::HeaderValue::from_static("*/*"));
+      headers.insert("sec-fetch-dest", header::HeaderValue::from_static("script"));
+      headers.insert("sec-fetch-mode", header::HeaderValue::from_static("no-cors"));
+      headers.insert(
+         "sec-fetch-site",
+         header::HeaderValue::from_static("cross-site"),
+      );
+      headers.insert("priority", header::HeaderValue::from_static("u=1"));
+      headers.insert(
+         header::REFERER,
+         header::HeaderValue::from_static("https://x.com/"),
+      );
       let js_text = self
          .http
-         .get_with_headers(&js_url, &headers)
+         .get_on(&js_url, &headers, Some(&egress))
          .await
          .map_err(|err| format!("fetch ondemand JS: {err}"))?
          .text()

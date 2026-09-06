@@ -37,7 +37,6 @@ use crate::{
       Result,
    },
    types::{
-      GalleryPhoto,
       Prefs,
       Profile,
       Timeline,
@@ -58,9 +57,10 @@ async fn load_first_profile(state: &AppState, username: &str) -> Result<Profile>
       let username = username.to_owned();
       move |state| async move {
          let hint = helpers::user_hint(&state, &username);
+         let rail = helpers::cached_photo_rail(&state, &username);
          if let Ok(profile) = state
             .api
-            .get_profile_hinted(&username, None, hint.as_ref())
+            .get_profile_hinted(&username, None, hint.as_ref(), rail)
             .await
          {
             helpers::store_profile(&state, &profile);
@@ -72,10 +72,11 @@ async fn load_first_profile(state: &AppState, username: &str) -> Result<Profile>
    }
 
    let hint = helpers::user_hint(state, username);
+   let rail = helpers::cached_photo_rail(state, username);
    let (profile_res, about) = tokio::join!(
       state
          .api
-         .get_profile_hinted(username, None, hint.as_ref()),
+         .get_profile_hinted(username, None, hint.as_ref(), rail),
       helpers::load_account_context(state, username),
    );
    let mut profile = profile_res?;
@@ -203,7 +204,7 @@ async fn user_timeline(
       let hint = helpers::user_hint(&state, &username);
       state
          .api
-         .get_profile_hinted(&username, query.cursor.as_deref(), hint.as_ref())
+         .get_profile_hinted(&username, query.cursor.as_deref(), hint.as_ref(), None)
          .await
    };
 
@@ -347,7 +348,10 @@ async fn user_tab_handler(
    };
 
    let (timeline_result, photo_rail) = if include_photo_rail {
-      let (tl, rail) = tokio::join!(fetch_timeline, fetch_photo_rail(state, &user.id));
+      let (tl, rail) = tokio::join!(
+         fetch_timeline,
+         helpers::photo_rail(state, username, &user.id)
+      );
       (tl, rail)
    } else {
       (fetch_timeline.await, vec![])
@@ -478,7 +482,7 @@ async fn user_search(
       format!("from:{username} {search_query}")
    };
    let (photo_rail, search_result) = tokio::join!(
-      fetch_photo_rail(&state, &user.id),
+      helpers::photo_rail(&state, &username, &user.id),
       state
          .api
          .search(&api_query, query.cursor.as_deref(), "Latest"),
@@ -545,10 +549,6 @@ async fn user_search(
 }
 
 /// Fetch photo rail for a user, returning empty vec on error.
-async fn fetch_photo_rail(state: &AppState, user_id: &str) -> Vec<GalleryPhoto> {
-   state.api.get_photo_rail(user_id).await.unwrap_or_default()
-}
-
 /// Handle multi-user timeline (comma-separated usernames).
 async fn multi_user_timeline(
    state: AppState,

@@ -38,8 +38,6 @@ pub const BROADCAST_SHOW_PATH: &str = "/i/api/1.1/broadcasts/show.json";
 /// Strato translation keeps its own budget, so it must not be accounted
 /// against `TweetDetail`.
 pub const STRATO_TRANSLATE: &str = "strato/translateTweet";
-pub const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
-                              (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36";
 
 // Base URLs
 pub const GRAPHQL_URL: &str = "https://x.com/i/api/graphql";

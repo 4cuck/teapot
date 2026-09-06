@@ -1,18 +1,17 @@
+//! Outbound HTTP, presented as a real browser.
+//!
+//! Every request goes out through a [`primp`] client that carries a browser's
+//! TLS and HTTP/2 fingerprint and headers. Requests made on behalf of an
+//! account use a client built for that account's [`Identity`] and pinned
+//! proxy, so one session always looks like one browser on one IP; anything
+//! else (media, bootstrap fetches) uses a shared default client.
+
 use std::{
-   collections::{
-      HashMap,
-      VecDeque,
-   },
+   collections::HashMap,
+   error::Error as _,
    fmt::Write as _,
-   future::Future as _,
-   io::{
-      Error as IoError,
-      ErrorKind,
-      Read as _,
-   },
    pin::Pin,
    result::Result as StdResult,
-   str,
    sync::{
       Arc,
       Mutex,
@@ -21,126 +20,43 @@ use std::{
       Context,
       Poll,
    },
-   time::{
-      Duration,
-      Instant as StdInstant,
-   },
+   time::Duration,
 };
 
 use axum::http::{
    HeaderMap,
+   HeaderValue,
    Method,
-   Uri,
+   StatusCode,
    header,
 };
 use bytes::Bytes;
-use flate2::read::GzDecoder;
-use http_body_util::{
-   BodyExt as _,
-   Full,
-};
-use hyper::{
-   StatusCode,
-   body::{
-      self as hyper_body,
-      Frame,
-   },
-   client::conn::http1,
-   http::uri::PathAndQuery,
-};
-use hyper_rustls::HttpsConnectorBuilder;
-use hyper_util::{
-   client::legacy::{
-      Client,
-      connect::HttpConnector,
-   },
-   rt::{
-      TokioExecutor,
-      TokioIo,
-   },
-};
-use serde::de::DeserializeOwned;
-use tokio::{
-   io::{
-      AsyncReadExt as _,
-      AsyncWriteExt as _,
-   },
-   net::TcpStream,
-   time::{
-      Instant,
-      Sleep,
-      sleep,
-      timeout,
-   },
-};
+use futures_core::Stream;
+use http_body::Frame;
 
+use super::browser::{
+   self,
+   Engine,
+   Identity,
+};
 use crate::error::{
    Error,
    Result,
 };
 
-type Connector = hyper_rustls::HttpsConnector<HttpConnector>;
-
 const DEFAULT_BODY_LIMIT: usize = 32 * 1024 * 1024; // 32 MiB
+/// Whole API call, connect to last byte.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const BODY_TIMEOUT: Duration = Duration::from_secs(60);
+/// A media stream may run long; this is the cap on the whole transfer.
+const MEDIA_TIMEOUT: Duration = Duration::from_secs(60);
+/// Longest silence tolerated mid-body.
 const BODY_IDLE_TIMEOUT: Duration = Duration::from_secs(20);
-const TUNNEL_IDLE: Duration = Duration::from_secs(45);
-const TUNNEL_PER_KEY: usize = 2;
-
-type TunnelSender = http1::SendRequest<Full<Bytes>>;
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct TunnelKey {
-   proxy_host:  String,
-   proxy_port:  u16,
-   origin_host: String,
-   origin_port: u16,
-}
-
-struct TunnelPool {
-   idle: Mutex<HashMap<TunnelKey, VecDeque<(TunnelSender, StdInstant)>>>,
-}
-
-impl TunnelPool {
-   fn new() -> Arc<Self> {
-      Arc::new(Self {
-         idle: Mutex::new(HashMap::new()),
-      })
-   }
-
-   fn take(&self, key: &TunnelKey) -> Option<TunnelSender> {
-      let mut map = self.idle.lock().ok()?;
-      let queue = map.get_mut(key)?;
-      let now = StdInstant::now();
-      while let Some((sender, since)) = queue.pop_front() {
-         if sender.is_closed() || now.saturating_duration_since(since) > TUNNEL_IDLE {
-            continue;
-         }
-         return Some(sender);
-      }
-      None
-   }
-
-   fn put(&self, key: TunnelKey, sender: TunnelSender) {
-      if sender.is_closed() {
-         return;
-      }
-      let Ok(mut map) = self.idle.lock() else {
-         return;
-      };
-      let queue = map.entry(key).or_default();
-      while queue.len() >= TUNNEL_PER_KEY {
-         queue.pop_front();
-      }
-      queue.push_back((sender, StdInstant::now()));
-   }
-}
-
-enum ResponseBody {
-   Incoming(hyper_body::Incoming),
-   Buffered(Bytes),
-}
+/// Idle connections are kept this long. A session's connection to X is
+/// multiplexed HTTP/2 and pinged, so a dead one is noticed rather than hung on.
+const POOL_IDLE: Duration = Duration::from_secs(300);
+const POOL_PER_HOST: usize = 4;
+const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(45);
+const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProxyKind {
@@ -149,539 +65,194 @@ pub enum ProxyKind {
 }
 
 /// Parsed proxy configuration.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ProxyConfig {
-   pub host:       String,
-   pub port:       u16,
-   pub kind:       ProxyKind,
-   pub auth:       Option<String>,
-   pub socks_user: Option<String>,
-   pub socks_pass: Option<String>,
+   pub host:     String,
+   pub port:     u16,
+   pub kind:     ProxyKind,
+   pub username: Option<String>,
+   pub password: Option<String>,
 }
 
-/// Lightweight HTTP client wrapping hyper-util's connection-pooling client.
-///
-/// When a proxy is configured, HTTPS requests are tunneled via HTTP CONNECT.
+impl ProxyConfig {
+   /// Proxy URL in the form the client takes. SOCKS5 resolves the origin's
+   /// name at the proxy, so X sees the exit's DNS rather than ours.
+   #[must_use]
+   pub fn url(&self) -> String {
+      let scheme = match self.kind {
+         ProxyKind::Http => "http",
+         ProxyKind::Socks5 => "socks5h",
+      };
+      let mut url = format!("{scheme}://");
+      if let Some(ref user) = self.username {
+         url.push_str(&percent_encoding::utf8_percent_encode(
+            user,
+            percent_encoding::NON_ALPHANUMERIC,
+         )
+         .to_string());
+         if let Some(ref pass) = self.password {
+            url.push(':');
+            url.push_str(&percent_encoding::utf8_percent_encode(
+               pass,
+               percent_encoding::NON_ALPHANUMERIC,
+            )
+            .to_string());
+         }
+         url.push('@');
+      }
+      let _ = write!(url, "{}:{}", self.host, self.port);
+      url
+   }
+}
+
+/// Who a request goes out as: the account whose browser it presents, and the
+/// proxy that account is pinned to.
+#[derive(Clone, Debug)]
+pub struct Egress {
+   pub session: i64,
+   pub proxy:   Option<ProxyConfig>,
+}
+
+/// What a client's requests are for, which decides the fetch-context headers
+/// a browser would send with them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Purpose {
+   /// XHR from x.com's web app to its API.
+   Api,
+   /// Images and video pulled from X's CDN by a page.
+   Media,
+}
+
+impl Purpose {
+   const fn timeout(self) -> Duration {
+      match self {
+         Self::Api => REQUEST_TIMEOUT,
+         Self::Media => MEDIA_TIMEOUT,
+      }
+   }
+}
+
+/// Browser-impersonating client with one connection pool per account.
 #[derive(Clone)]
 #[expect(
    clippy::module_name_repetitions,
    reason = "HttpClient is clearer than Client"
 )]
 pub struct HttpClient {
-   inner:           Client<Connector, Full<Bytes>>,
-   default_headers: HeaderMap,
-   proxy:           Option<ProxyConfig>,
-   tls:             Arc<rustls::ClientConfig>,
-   tunnels:         Arc<TunnelPool>,
+   purpose:       Purpose,
+   default:       primp::Client,
+   default_proxy: Option<ProxyConfig>,
+   extra_headers: HeaderMap,
+   sessions:      Arc<Mutex<HashMap<i64, primp::Client>>>,
 }
 
 /// Response wrapper providing convenience methods.
 pub struct Response {
-   status:  StatusCode,
-   headers: HeaderMap,
-   body:    ResponseBody,
-}
-
-/// Response body with both an overall deadline and an idle-chunk deadline.
-pub struct TimedBody {
-   inner:    hyper_body::Incoming,
-   deadline: Pin<Box<Sleep>>,
-   idle:     Pin<Box<Sleep>>,
-   done:     bool,
-}
-
-impl TimedBody {
-   fn new(inner: hyper_body::Incoming) -> Self {
-      Self {
-         inner,
-         deadline: Box::pin(sleep(BODY_TIMEOUT)),
-         idle: Box::pin(sleep(BODY_IDLE_TIMEOUT)),
-         done: false,
-      }
-   }
-}
-
-impl hyper_body::Body for TimedBody {
-   type Data = Bytes;
-   type Error = IoError;
-
-   fn poll_frame(
-      mut self: Pin<&mut Self>,
-      cx: &mut Context<'_>,
-   ) -> Poll<Option<StdResult<Frame<Self::Data>, Self::Error>>> {
-      if self.done {
-         return Poll::Ready(None);
-      }
-      if self.deadline.as_mut().poll(cx).is_ready() {
-         self.done = true;
-         return Poll::Ready(Some(Err(IoError::new(
-            ErrorKind::TimedOut,
-            "response body deadline exceeded",
-         ))));
-      }
-      if self.idle.as_mut().poll(cx).is_ready() {
-         self.done = true;
-         return Poll::Ready(Some(Err(IoError::new(
-            ErrorKind::TimedOut,
-            "response body stalled",
-         ))));
-      }
-
-      match Pin::new(&mut self.inner).poll_frame(cx) {
-         Poll::Ready(Some(Ok(frame))) => {
-            self.idle.as_mut().reset(Instant::now() + BODY_IDLE_TIMEOUT);
-            Poll::Ready(Some(Ok(frame)))
-         },
-         Poll::Ready(Some(Err(err))) => {
-            self.done = true;
-            Poll::Ready(Some(Err(IoError::other(err))))
-         },
-         Poll::Ready(None) => {
-            self.done = true;
-            Poll::Ready(None)
-         },
-         Poll::Pending => Poll::Pending,
-      }
-   }
-
-   fn is_end_stream(&self) -> bool {
-      self.done || self.inner.is_end_stream()
-   }
-
-   fn size_hint(&self) -> hyper_body::SizeHint {
-      self.inner.size_hint()
-   }
+   inner: primp::Response,
 }
 
 impl HttpClient {
-   pub fn new(proxy_url: &str, proxy_auth: &str) -> Self {
-      let roots = rustls_native_certs::load_native_certs()
-         .certs
-         .into_iter()
-         .fold(rustls::RootCertStore::empty(), |mut store, cert| {
-            let _ = store.add(cert);
-            store
-         });
-
-      let mut tls_config = rustls::ClientConfig::builder()
-         .with_root_certificates(roots.clone())
-         .with_no_client_auth();
-      tls_config.alpn_protocols = vec![b"http/1.1".to_vec()];
-      tls_config.resumption = rustls::client::Resumption::in_memory_sessions(512);
-      let tls = Arc::new(tls_config);
-
-      let connector = HttpsConnectorBuilder::new()
-         .with_tls_config(
-            rustls::ClientConfig::builder()
-               .with_root_certificates(roots)
-               .with_no_client_auth(),
-         )
-         .https_or_http()
-         .enable_http1()
-         .build();
-
-      let inner = Client::builder(TokioExecutor::new())
-         .pool_idle_timeout(Duration::from_secs(90))
-         .build(connector);
-
-      let proxy = if proxy_url.is_empty() {
-         None
-      } else {
-         Some(parse_proxy(proxy_url, proxy_auth))
-      };
-
+   /// A client for `purpose`, optionally through an HTTP proxy from the
+   /// config. Requests without an [`Egress`] present as the default identity:
+   /// the newest accepted Chrome on Windows.
+   pub fn new(proxy_url: &str, proxy_auth: &str, purpose: Purpose) -> Self {
+      let default_proxy = (!proxy_url.is_empty()).then(|| parse_proxy(proxy_url, proxy_auth));
+      let extra_headers = HeaderMap::new();
+      let default = build_client(
+         default_identity(),
+         default_proxy.as_ref(),
+         purpose,
+         &extra_headers,
+      )
+      .unwrap_or_else(|err| {
+         tracing::error!("browser client for the default identity failed to build: {err}");
+         // Without impersonation the client is still a working HTTP client.
+         primp::Client::builder()
+            .redirect(primp::redirect::Policy::none())
+            .timeout(purpose.timeout())
+            .build()
+            .expect("plain HTTP client builds without I/O")
+      });
       Self {
-         inner,
-         default_headers: HeaderMap::new(),
-         proxy,
-         tls,
-         tunnels: TunnelPool::new(),
+         purpose,
+         default,
+         default_proxy,
+         extra_headers,
+         sessions: Arc::new(Mutex::new(HashMap::new())),
       }
    }
 
-   /// Create a client with default headers applied to every request.
+   /// Headers added to every request this client makes.
+   #[must_use]
    pub fn with_default_headers(mut self, headers: HeaderMap) -> Self {
-      self.default_headers = headers;
+      self.extra_headers = headers;
+      self.rebuild_default();
       self
    }
 
-   /// Override the default proxy for this client.
+   /// Route requests made without an [`Egress`] through `proxy`.
    #[must_use]
    pub fn with_default_proxy(mut self, proxy: ProxyConfig) -> Self {
-      self.proxy = Some(proxy);
+      self.default_proxy = Some(proxy);
+      self.rebuild_default();
       self
    }
 
-   /// Send a request with a given method, optional extra headers, and body.
-   async fn send(
-      &self,
-      method: Method,
-      uri: &str,
-      extra_headers: &HeaderMap,
-      body: Bytes,
-   ) -> Result<Response> {
-      self
-         .send_on(method, uri, extra_headers, body, None)
-         .await
-   }
-
-   async fn send_on(
-      &self,
-      method: Method,
-      uri: &str,
-      extra_headers: &HeaderMap,
-      body: Bytes,
-      via: Option<&ProxyConfig>,
-   ) -> Result<Response> {
-      timeout(REQUEST_TIMEOUT, async {
-         if let Some(proxy) = via.or(self.proxy.as_ref()) {
-            self
-               .send_via_proxy(proxy, method, uri, extra_headers, body)
-               .await
-         } else {
-            self.send_direct(method, uri, extra_headers, body).await
-         }
-      })
-      .await
-      .map_err(|_| Error::Internal("HTTP request timed out".into()))?
-   }
-
-   /// Direct request through hyper's connection pool.
-   async fn send_direct(
-      &self,
-      method: Method,
-      uri: &str,
-      extra_headers: &HeaderMap,
-      body: Bytes,
-   ) -> Result<Response> {
-      let parsed: Uri = uri
-         .parse()
-         .map_err(|err| Error::Internal(format!("invalid URI: {err}")))?;
-
-      let mut builder = hyper::Request::builder().method(method).uri(parsed);
-      for (key, value) in &self.default_headers {
-         builder = builder.header(key, value);
+   fn rebuild_default(&mut self) {
+      match build_client(
+         default_identity(),
+         self.default_proxy.as_ref(),
+         self.purpose,
+         &self.extra_headers,
+      ) {
+         Ok(client) => self.default = client,
+         Err(err) => tracing::error!("browser client for the default identity failed to build: {err}"),
       }
-      for (key, value) in extra_headers {
-         builder = builder.header(key, value);
-      }
-
-      let request = builder
-         .body(Full::new(body))
-         .map_err(|err| Error::Internal(format!("build request: {err}")))?;
-
-      let resp = self
-         .inner
-         .request(request)
-         .await
-         .map_err(|err| Error::Internal(format!("HTTP request failed: {err}")))?;
-
-      let (parts, body) = resp.into_parts();
-      Ok(Response {
-         status:  parts.status,
-         headers: parts.headers,
-         body:    ResponseBody::Incoming(body),
-      })
    }
 
-   /// Send request through HTTP CONNECT proxy tunnel.
-   async fn send_via_proxy(
-      &self,
-      proxy: &ProxyConfig,
-      method: Method,
-      uri: &str,
-      extra_headers: &HeaderMap,
-      body: Bytes,
-   ) -> Result<Response> {
-      let parsed: Uri = uri
-         .parse()
-         .map_err(|err| Error::Internal(format!("invalid URI: {err}")))?;
-
-      let target_host = parsed
-         .host()
-         .ok_or_else(|| Error::Internal("no host in URI".into()))?;
-      let target_port = parsed.port_u16().unwrap_or_else(|| {
-         if parsed.scheme_str() == Some("https") {
-            443
-         } else {
-            80
-         }
-      });
-      let is_https = parsed.scheme_str() == Some("https");
-      let path_and_query = parsed.path_and_query().map_or("/", PathAndQuery::as_str);
-      let key = TunnelKey {
-         proxy_host:  proxy.host.clone(),
-         proxy_port:  proxy.port,
-         origin_host: target_host.to_owned(),
-         origin_port: target_port,
+   /// The client for an account, built on first use and kept for the life of
+   /// the process, so its connections and fingerprint persist.
+   fn client_for(&self, via: Option<&Egress>) -> Result<primp::Client> {
+      let Some(egress) = via else {
+         return Ok(self.default.clone());
       };
-
-      if (proxy.kind == ProxyKind::Socks5 || is_https)
-         && let Some(sender) = self.tunnels.take(&key)
+      if let Some(client) = self
+         .sessions
+         .lock()
+         .ok()
+         .and_then(|clients| clients.get(&egress.session).cloned())
       {
-         match self
-            .proxy_http1(
-               sender,
-               method.clone(),
-               path_and_query,
-               target_host,
-               extra_headers,
-               body.clone(),
-               None,
-            )
-            .await
-         {
-            Ok((resp, sender)) => {
-               self.tunnels.put(key, sender);
-               return Ok(resp);
-            },
-            Err(err) => {
-               tracing::debug!("idle proxy tunnel dropped: {err}");
-            },
-         }
+         return Ok(client);
       }
-
-      // TCP connect to proxy
-      let mut stream = TcpStream::connect((&*proxy.host, proxy.port))
-         .await
-         .map_err(|err| Error::Internal(format!("proxy connect: {err}")))?;
-      let _ = stream.set_nodelay(true);
-
-      if proxy.kind == ProxyKind::Socks5 {
-         socks5_connect(&mut stream, proxy, target_host, target_port).await?;
-         return self
-            .send_origin_request(stream, is_https, &parsed, method, extra_headers, body, key)
-            .await;
+      let identity = browser::identity_for(egress.session);
+      let client = build_client(identity, egress.proxy.as_ref(), self.purpose, &self.extra_headers)?;
+      tracing::debug!(session_id = egress.session, %identity, "browser client built");
+      if let Ok(mut clients) = self.sessions.lock() {
+         clients.entry(egress.session).or_insert_with(|| client.clone());
       }
-
-      if is_https {
-         // CONNECT handshake
-         let mut connect_req = format!(
-            "CONNECT {target_host}:{target_port} HTTP/1.1\r\nHost: {target_host}:{target_port}\r\n"
-         );
-         if let Some(ref auth) = proxy.auth {
-            let _ = write!(connect_req, "Proxy-Authorization: Basic {auth}\r\n");
-         }
-         connect_req.push_str("\r\n");
-
-         stream
-            .write_all(connect_req.as_bytes())
-            .await
-            .map_err(|err| Error::Internal(format!("proxy CONNECT write: {err}")))?;
-
-         // Read the CONNECT response and look for the end of its HTTP headers
-         let mut buf = vec![0_u8; 4096];
-         let mut filled = 0;
-         loop {
-            let n = stream
-               .read(&mut buf[filled..])
-               .await
-               .map_err(|err| Error::Internal(format!("proxy CONNECT read: {err}")))?;
-            if n == 0 {
-               return Err(Error::Internal("proxy closed during CONNECT".into()));
-            }
-            filled += n;
-            if filled >= 4 && buf[..filled].windows(4).any(|w| w == b"\r\n\r\n") {
-               break;
-            }
-            if filled >= buf.len() {
-               return Err(Error::Internal("proxy CONNECT response too large".into()));
-            }
-         }
-
-         let response_line = str::from_utf8(&buf[..filled])
-            .map_err(|_| Error::Internal("proxy CONNECT: invalid UTF-8".into()))?;
-         if !response_line.starts_with("HTTP/1.1 200") && !response_line.starts_with("HTTP/1.0 200")
-         {
-            let first_line = response_line.lines().next().unwrap_or("(empty)");
-            return Err(Error::Internal(format!(
-               "proxy CONNECT rejected: {first_line}"
-            )));
-         }
-
-         self
-            .send_origin_request(stream, true, &parsed, method, extra_headers, body, key)
-            .await
-      } else {
-         let _ = key;
-         // Send plain HTTP proxy requests with an absolute URI
-         let (mut sender, conn) = http1::handshake(TokioIo::new(stream))
-            .await
-            .map_err(|err| Error::Internal(format!("proxy HTTP handshake: {err}")))?;
-
-         tokio::spawn(async move {
-            if let Err(err) = conn.await {
-               tracing::debug!("proxy connection closed: {err}");
-            }
-         });
-
-         let mut builder = hyper::Request::builder()
-            .method(method)
-            .uri(uri) // absolute URI for HTTP proxy
-            .header(header::HOST, target_host);
-
-         if let Some(ref auth) = proxy.auth {
-            builder = builder.header("Proxy-Authorization", format!("Basic {auth}"));
-         }
-         for (key, value) in &self.default_headers {
-            builder = builder.header(key, value);
-         }
-         for (key, value) in extra_headers {
-            builder = builder.header(key, value);
-         }
-
-         let request = builder
-            .body(Full::new(body))
-            .map_err(|err| Error::Internal(format!("build proxied request: {err}")))?;
-
-         let resp = sender
-            .send_request(request)
-            .await
-            .map_err(|err| Error::Internal(format!("proxied request failed: {err}")))?;
-
-         let (parts, body) = resp.into_parts();
-         Ok(Response {
-            status:  parts.status,
-            headers: parts.headers,
-            body:    ResponseBody::Incoming(body),
-         })
-      }
-   }
-
-   /// HTTP/1.1 on an already-tunneled stream (CONNECT or SOCKS5).
-   async fn send_origin_request(
-      &self,
-      stream: TcpStream,
-      is_https: bool,
-      parsed: &Uri,
-      method: Method,
-      extra_headers: &HeaderMap,
-      body: Bytes,
-      key: TunnelKey,
-   ) -> Result<Response> {
-      let target_host = parsed
-         .host()
-         .ok_or_else(|| Error::Internal("no host in URI".into()))?;
-      let path_and_query = parsed.path_and_query().map_or("/", PathAndQuery::as_str);
-
-      let sender = if is_https {
-         let server_name = rustls::pki_types::ServerName::try_from(target_host.to_owned())
-            .map_err(|err| Error::Internal(format!("invalid server name: {err}")))?;
-         let tls_connector = tokio_rustls::TlsConnector::from(Arc::clone(&self.tls));
-         let tls_stream = tls_connector
-            .connect(server_name, stream)
-            .await
-            .map_err(|err| Error::Internal(format!("proxy TLS handshake: {err}")))?;
-         Self::http1_handshake(TokioIo::new(tls_stream)).await?
-      } else {
-         Self::http1_handshake(TokioIo::new(stream)).await?
-      };
-      let (resp, sender) = self
-         .proxy_http1(
-            sender,
-            method,
-            path_and_query,
-            target_host,
-            extra_headers,
-            body,
-            None,
-         )
-         .await?;
-      self.tunnels.put(key, sender);
-      Ok(resp)
-   }
-
-   async fn http1_handshake<IO>(io: TokioIo<IO>) -> Result<TunnelSender>
-   where
-      IO: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
-   {
-      let (sender, conn) = http1::handshake(io)
-         .await
-         .map_err(|err| Error::Internal(format!("proxy HTTP handshake: {err}")))?;
-      tokio::spawn(async move {
-         if let Err(err) = conn.await {
-            tracing::debug!("proxy connection closed: {err}");
-         }
-      });
-      Ok(sender)
-   }
-
-   #[expect(
-      clippy::too_many_arguments,
-      reason = "mirrors the origin HTTP/1.1 request"
-   )]
-   async fn proxy_http1(
-      &self,
-      mut sender: TunnelSender,
-      method: Method,
-      uri: &str,
-      host: &str,
-      extra_headers: &HeaderMap,
-      body: Bytes,
-      proxy_auth: Option<&str>,
-   ) -> Result<(Response, TunnelSender)> {
-      let mut builder = hyper::Request::builder()
-         .method(method)
-         .uri(uri)
-         .header(header::HOST, host)
-         .header(header::CONNECTION, "keep-alive");
-      if let Some(auth) = proxy_auth {
-         builder = builder.header("Proxy-Authorization", format!("Basic {auth}"));
-      }
-      for (key, value) in &self.default_headers {
-         builder = builder.header(key, value);
-      }
-      for (key, value) in extra_headers {
-         builder = builder.header(key, value);
-      }
-      let request = builder
-         .body(Full::new(body))
-         .map_err(|err| Error::Internal(format!("build proxied request: {err}")))?;
-      let resp = sender
-         .send_request(request)
-         .await
-         .map_err(|err| Error::Internal(format!("proxied request failed: {err}")))?;
-      let (parts, body) = resp.into_parts();
-      let collected = timeout(BODY_TIMEOUT, body.collect())
-         .await
-         .map_err(|_| Error::Internal("response body deadline exceeded".into()))?
-         .map_err(|err| Error::Internal(format!("read body: {err}")))?;
-      let buf = collected.to_bytes();
-      if buf.len() > DEFAULT_BODY_LIMIT {
-         return Err(Error::Internal(format!(
-            "response body exceeded {DEFAULT_BODY_LIMIT} bytes"
-         )));
-      }
-      Ok((
-         Response {
-            status:  parts.status,
-            headers: parts.headers,
-            body:    ResponseBody::Buffered(buf),
-         },
-         sender,
-      ))
+      Ok(client)
    }
 
    /// Send a GET request.
    pub async fn get(&self, uri: &str) -> Result<Response> {
       self
-         .send(Method::GET, uri, &HeaderMap::new(), Bytes::new())
+         .send_on(Method::GET, uri, &HeaderMap::new(), Bytes::new(), None)
          .await
    }
 
    /// Send a GET request with additional headers.
    pub async fn get_with_headers(&self, uri: &str, extra_headers: &HeaderMap) -> Result<Response> {
       self
-         .send(Method::GET, uri, extra_headers, Bytes::new())
+         .send_on(Method::GET, uri, extra_headers, Bytes::new(), None)
          .await
    }
 
-   /// GET through an explicit proxy (session-pinned SOCKS5).
+   /// GET as an account, through its pinned proxy.
    pub async fn get_on(
       &self,
       uri: &str,
       extra_headers: &HeaderMap,
-      via: Option<&ProxyConfig>,
+      via: Option<&Egress>,
    ) -> Result<Response> {
       self
          .send_on(Method::GET, uri, extra_headers, Bytes::new(), via)
@@ -695,16 +266,18 @@ impl HttpClient {
       extra_headers: &HeaderMap,
       body: Bytes,
    ) -> Result<Response> {
-      self.send(Method::POST, uri, extra_headers, body).await
+      self
+         .send_on(Method::POST, uri, extra_headers, body, None)
+         .await
    }
 
-   /// POST through an explicit proxy (session-pinned SOCKS5).
+   /// POST as an account, through its pinned proxy.
    pub async fn post_on(
       &self,
       uri: &str,
       extra_headers: &HeaderMap,
       body: Bytes,
-      via: Option<&ProxyConfig>,
+      via: Option<&Egress>,
    ) -> Result<Response> {
       self
          .send_on(Method::POST, uri, extra_headers, body, via)
@@ -714,226 +287,315 @@ impl HttpClient {
    /// Send a HEAD request.
    pub async fn head(&self, uri: &str) -> Result<Response> {
       self
-         .send(Method::HEAD, uri, &HeaderMap::new(), Bytes::new())
+         .send_on(Method::HEAD, uri, &HeaderMap::new(), Bytes::new(), None)
          .await
+   }
+
+   async fn send_on(
+      &self,
+      method: Method,
+      uri: &str,
+      extra_headers: &HeaderMap,
+      body: Bytes,
+      via: Option<&Egress>,
+   ) -> Result<Response> {
+      let client = self.client_for(via)?;
+      let send = || {
+         let mut request = client
+            .request(method.clone(), uri)
+            .headers(extra_headers.clone());
+         if !body.is_empty() {
+            request = request.body(body.clone());
+         }
+         request.send()
+      };
+      let inner = match send().await {
+         Ok(inner) => inner,
+         // A pooled connection the far end closed a moment ago fails on the
+         // first write ("broken pipe", "connection reset") rather than with a
+         // GOAWAY the client would retry itself. Safe to repeat for requests
+         // that change nothing.
+         Err(err) if is_idempotent(&method) && is_transport_blip(&err) => {
+            tracing::debug!(uri, "retrying after transport error: {}", describe(err));
+            send().await.map_err(describe)?
+         },
+         Err(err) => return Err(describe(err)),
+      };
+      Ok(Response { inner })
    }
 }
 
-/// SOCKS5 CONNECT with username/password auth (RFC 1928 + 1929).
-async fn socks5_connect(
-   stream: &mut TcpStream,
-   proxy: &ProxyConfig,
-   target_host: &str,
-   target_port: u16,
-) -> Result<()> {
-   let user = proxy.socks_user.as_deref().unwrap_or("");
-   let pass = proxy.socks_pass.as_deref().unwrap_or("");
-   if user.len() > 255 || pass.len() > 255 {
-      return Err(Error::Internal("SOCKS5 credentials too long".into()));
+/// The browser presented when no account is involved.
+fn default_identity() -> Identity {
+   Identity {
+      engine: Engine::Chrome,
+      os:     primp::ImpersonateOS::Windows,
    }
+}
 
-   stream
-      .write_all(&[0x05, 0x01, 0x02])
-      .await
-      .map_err(|err| Error::Internal(format!("SOCKS5 greeting: {err}")))?;
-   let mut method = [0_u8; 2];
-   stream
-      .read_exact(&mut method)
-      .await
-      .map_err(|err| Error::Internal(format!("SOCKS5 greeting read: {err}")))?;
-   if method[0] != 0x05 || method[1] != 0x02 {
-      return Err(Error::Internal(format!(
-         "SOCKS5 auth method rejected: {method:?}"
-      )));
-   }
-
-   let mut auth = Vec::with_capacity(3 + user.len() + pass.len());
-   auth.push(0x01);
-   auth.push(u8::try_from(user.len()).unwrap_or(0));
-   auth.extend_from_slice(user.as_bytes());
-   auth.push(u8::try_from(pass.len()).unwrap_or(0));
-   auth.extend_from_slice(pass.as_bytes());
-   stream
-      .write_all(&auth)
-      .await
-      .map_err(|err| Error::Internal(format!("SOCKS5 auth: {err}")))?;
-   let mut auth_reply = [0_u8; 2];
-   stream
-      .read_exact(&mut auth_reply)
-      .await
-      .map_err(|err| Error::Internal(format!("SOCKS5 auth read: {err}")))?;
-   if auth_reply[1] != 0 {
-      return Err(Error::Internal(format!(
-         "SOCKS5 authentication failed: {}",
-         auth_reply[1]
-      )));
-   }
-
-   let host = target_host.as_bytes();
-   if host.len() > 255 {
-      return Err(Error::Internal("SOCKS5 target hostname too long".into()));
-   }
-   let mut req = Vec::with_capacity(7 + host.len());
-   req.extend_from_slice(&[0x05, 0x01, 0x00, 0x03]);
-   req.push(u8::try_from(host.len()).unwrap_or(0));
-   req.extend_from_slice(host);
-   req.extend_from_slice(&target_port.to_be_bytes());
-   stream
-      .write_all(&req)
-      .await
-      .map_err(|err| Error::Internal(format!("SOCKS5 connect: {err}")))?;
-
-   let mut hdr = [0_u8; 4];
-   stream
-      .read_exact(&mut hdr)
-      .await
-      .map_err(|err| Error::Internal(format!("SOCKS5 reply: {err}")))?;
-   if hdr[0] != 0x05 || hdr[1] != 0 {
-      return Err(Error::Internal(format!(
-         "SOCKS5 connect failed: status {}",
-         hdr[1]
-      )));
-   }
-   let skip = match hdr[3] {
-      1 => 4 + 2,
-      4 => 16 + 2,
-      3 => {
-         let mut len = [0_u8; 1];
-         stream
-            .read_exact(&mut len)
-            .await
-            .map_err(|err| Error::Internal(format!("SOCKS5 bind addr: {err}")))?;
-         usize::from(len[0]) + 2
+fn build_client(
+   identity: Identity,
+   proxy: Option<&ProxyConfig>,
+   purpose: Purpose,
+   extra_headers: &HeaderMap,
+) -> Result<primp::Client> {
+   let mut builder = primp::Client::builder()
+      .impersonate(identity.profile())
+      .impersonate_os(identity.os)
+      // Redirects are the caller's business: t.co resolution reads them.
+      .redirect(primp::redirect::Policy::none())
+      .timeout(purpose.timeout())
+      .read_timeout(BODY_IDLE_TIMEOUT)
+      .pool_idle_timeout(POOL_IDLE)
+      .pool_max_idle_per_host(POOL_PER_HOST)
+      .http2_keep_alive_interval(KEEP_ALIVE_INTERVAL)
+      .http2_keep_alive_timeout(KEEP_ALIVE_TIMEOUT)
+      .http2_keep_alive_while_idle(true)
+      .tcp_nodelay(true);
+   builder = match proxy {
+      Some(proxy) => {
+         builder.proxy(
+            primp::Proxy::all(proxy.url())
+               .map_err(|err| Error::Internal(format!("proxy {}:{}: {err}", proxy.host, proxy.port)))?,
+         )
       },
-      atyp => {
-         return Err(Error::Internal(format!(
-            "SOCKS5 unknown address type {atyp}"
-         )));
+      None => builder.no_proxy(),
+   };
+   let mut client = builder
+      .build()
+      .map_err(|err| Error::Internal(format!("browser client for {identity}: {err}")))?;
+   shape_headers(client.headers_mut(), purpose, extra_headers);
+   Ok(client)
+}
+
+/// Turn the profile's page-navigation headers into the set a browser sends
+/// with the kind of request this client makes.
+///
+/// The profile ships the headers of a top-level page load. An XHR to the API
+/// or an image fetch carries the same identity headers (`user-agent`,
+/// `sec-ch-ua*`, `accept-language`, `accept-encoding`) but a different fetch
+/// context, and never `upgrade-insecure-requests` or `sec-fetch-user`. Keys
+/// are only rewritten where the profile sent them, so Safari, which sends no
+/// `sec-fetch-*` at all, stays Safari.
+fn shape_headers(headers: &mut HeaderMap, purpose: Purpose, extra: &HeaderMap) {
+   headers.remove("upgrade-insecure-requests");
+   headers.remove("sec-fetch-user");
+
+   let (accept, dest, mode, site, priority) = match purpose {
+      Purpose::Api => ("*/*", "empty", "cors", "same-origin", "u=1, i"),
+      Purpose::Media => {
+         (
+            "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            "image",
+            "no-cors",
+            "cross-site",
+            "u=1, i",
+         )
       },
    };
-   let mut rest = vec![0_u8; skip];
-   stream
-      .read_exact(&mut rest)
-      .await
-      .map_err(|err| Error::Internal(format!("SOCKS5 bind addr: {err}")))?;
-   Ok(())
+   for (name, value) in [
+      (header::ACCEPT, accept),
+      (header::HeaderName::from_static("sec-fetch-dest"), dest),
+      (header::HeaderName::from_static("sec-fetch-mode"), mode),
+      (header::HeaderName::from_static("sec-fetch-site"), site),
+      (header::HeaderName::from_static("priority"), priority),
+   ] {
+      if headers.contains_key(&name) {
+         headers.insert(name, HeaderValue::from_static(value));
+      }
+   }
+   if purpose == Purpose::Api {
+      headers.insert(header::REFERER, HeaderValue::from_static("https://x.com/"));
+   }
+   for (name, value) in extra {
+      headers.insert(name.clone(), value.clone());
+   }
+}
+
+const fn is_idempotent(method: &Method) -> bool {
+   matches!(*method, Method::GET | Method::HEAD)
+}
+
+/// A failure to send at all, as opposed to a timeout, a connect failure or a
+/// bad response: the far end dropped a connection we thought was open.
+fn is_transport_blip(err: &primp::Error) -> bool {
+   err.is_request() && !err.is_timeout() && !err.is_connect() && !err.is_body() && !err.is_decode()
+}
+
+/// Error text that keeps the cause, since the client's own `Display` stops at
+/// "error sending request".
+fn describe(err: primp::Error) -> Error {
+   if err.is_timeout() {
+      return Error::Internal("HTTP request timed out".into());
+   }
+   let mut text = if err.is_connect() {
+      String::from("connect failed")
+   } else {
+      err.to_string()
+   };
+   let mut source = err.source();
+   while let Some(cause) = source {
+      let _ = write!(text, ": {cause}");
+      source = cause.source();
+   }
+   Error::Internal(text)
 }
 
 /// Parse proxy URL (e.g. `http://host:port`) and optional `user:pass` auth.
 fn parse_proxy(url: &str, auth: &str) -> ProxyConfig {
-   let stripped = url
-      .strip_prefix("https://")
-      .or_else(|| url.strip_prefix("http://"))
-      .unwrap_or(url);
+   let (kind, stripped) = if let Some(rest) = url
+      .strip_prefix("socks5h://")
+      .or_else(|| url.strip_prefix("socks5://"))
+   {
+      (ProxyKind::Socks5, rest)
+   } else {
+      (
+         ProxyKind::Http,
+         url
+            .strip_prefix("https://")
+            .or_else(|| url.strip_prefix("http://"))
+            .unwrap_or(url),
+      )
+   };
    let (host, port) = if let Some((host_part, port_part)) = stripped.rsplit_once(':') {
       (host_part.to_owned(), port_part.parse().unwrap_or(8080))
    } else {
       (stripped.to_owned(), 8080)
    };
-   let auth = if auth.is_empty() {
-      None
-   } else {
-      Some(data_encoding::BASE64.encode(auth.as_bytes()))
+   let (username, password) = match auth.split_once(':') {
+      Some((user, pass)) => (Some(user.to_owned()), Some(pass.to_owned())),
+      None if auth.is_empty() => (None, None),
+      None => (Some(auth.to_owned()), None),
    };
    ProxyConfig {
       host,
       port,
-      kind: ProxyKind::Http,
-      auth,
-      socks_user: None,
-      socks_pass: None,
+      kind,
+      username,
+      password,
    }
 }
 
 impl Response {
-   pub const fn status(&self) -> StatusCode {
-      self.status
+   pub fn status(&self) -> StatusCode {
+      self.inner.status()
    }
 
-   pub const fn headers(&self) -> &HeaderMap {
-      &self.headers
+   pub fn headers(&self) -> &HeaderMap {
+      self.inner.headers()
    }
 
-   pub fn into_body(self) -> TimedBody {
-      match self.body {
-         ResponseBody::Incoming(body) => TimedBody::new(body),
-         ResponseBody::Buffered(_) => {
-            panic!("into_body is for streamed media responses, not proxied API calls")
-         },
+   /// The body as a stream, for media that is relayed rather than read.
+   pub fn into_body(self) -> StreamingBody {
+      StreamingBody {
+         inner: Box::pin(self.inner.bytes_stream()),
       }
    }
 
-   /// Collect the response body as bytes, decompressing gzip if needed.
+   /// Collect the response body as bytes; compression is already undone.
    pub async fn bytes(self) -> Result<Bytes> {
       self.bytes_limited(DEFAULT_BODY_LIMIT).await
    }
 
    /// Collect the response body as bytes, rejecting oversized bodies.
-   pub async fn bytes_limited(self, max_bytes: usize) -> Result<Bytes> {
-      let is_gzip = self
-         .headers
-         .get(header::CONTENT_ENCODING)
-         .and_then(|val| val.to_str().ok())
-         .is_some_and(|val| val.contains("gzip"));
-
-      let collected = match self.body {
-         ResponseBody::Buffered(bytes) => bytes,
-         ResponseBody::Incoming(incoming) => {
-            let mut body = TimedBody::new(incoming);
-            let mut collected = Vec::new();
-            while let Some(frame) = body.frame().await {
-               let frame = frame.map_err(|err| Error::Internal(format!("read body: {err}")))?;
-               let Ok(chunk) = frame.into_data() else {
-                  continue;
-               };
-               if collected.len().saturating_add(chunk.len()) > max_bytes {
-                  return Err(Error::Internal(format!(
-                     "response body exceeded {max_bytes} bytes"
-                  )));
-               }
-               collected.extend_from_slice(&chunk);
-            }
-            Bytes::from(collected)
-         },
-      };
-
-      if collected.len() > max_bytes {
+   pub async fn bytes_limited(mut self, max_bytes: usize) -> Result<Bytes> {
+      if let Some(declared) = self.inner.content_length()
+         && usize::try_from(declared).is_ok_and(|declared| declared > max_bytes)
+      {
          return Err(Error::Internal(format!(
             "response body exceeded {max_bytes} bytes"
          )));
       }
-
-      if is_gzip {
-         let gz = GzDecoder::new(collected.as_ref());
-         let mut decoded = Vec::new();
-         let mut limited = gz.take(max_bytes.saturating_add(1) as u64);
-         limited
-            .read_to_end(&mut decoded)
-            .map_err(|err| Error::Internal(format!("gzip decode: {err}")))?;
-         if decoded.len() > max_bytes {
+      let mut collected = Vec::new();
+      while let Some(chunk) = self.inner.chunk().await.map_err(describe)? {
+         if collected.len().saturating_add(chunk.len()) > max_bytes {
             return Err(Error::Internal(format!(
-               "decoded response body exceeded {max_bytes} bytes"
+               "response body exceeded {max_bytes} bytes"
             )));
          }
-         Ok(Bytes::from(decoded))
-      } else {
-         Ok(collected)
+         collected.extend_from_slice(&chunk);
       }
+      Ok(Bytes::from(collected))
    }
 
    /// Collect the response body as a UTF-8 string.
    pub async fn text(self) -> Result<String> {
       let data = self.bytes().await?;
-      String::from_utf8(data.to_vec())
+      String::from_utf8(data.into())
          .map_err(|err| Error::Internal(format!("invalid UTF-8: {err}")))
    }
+}
 
-   /// Deserialize the response body as JSON.
-   pub async fn json<T>(self) -> Result<T>
-   where
-      T: DeserializeOwned,
-   {
-      let data = self.bytes().await?;
-      serde_json::from_slice(&data).map_err(Into::into)
+/// A response body relayed chunk by chunk.
+pub struct StreamingBody {
+   inner: Pin<Box<dyn Stream<Item = primp::Result<Bytes>> + Send>>,
+}
+
+impl http_body::Body for StreamingBody {
+   type Data = Bytes;
+   type Error = std::io::Error;
+
+   fn poll_frame(
+      mut self: Pin<&mut Self>,
+      cx: &mut Context<'_>,
+   ) -> Poll<Option<StdResult<Frame<Self::Data>, Self::Error>>> {
+      match self.inner.as_mut().poll_next(cx) {
+         Poll::Ready(Some(Ok(chunk))) => Poll::Ready(Some(Ok(Frame::data(chunk)))),
+         Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(std::io::Error::other(err)))),
+         Poll::Ready(None) => Poll::Ready(None),
+         Poll::Pending => Poll::Pending,
+      }
+   }
+}
+
+#[cfg(test)]
+mod tests {
+   use super::*;
+
+   #[test]
+   fn socks_proxy_url_carries_credentials() {
+      let proxy = ProxyConfig {
+         host:     "proxy.example".into(),
+         port:     10001,
+         kind:     ProxyKind::Socks5,
+         username: Some("user".into()),
+         password: Some("p@ss:word".into()),
+      };
+      assert_eq!(proxy.url(), "socks5h://user:p%40ss%3Aword@proxy.example:10001");
+   }
+
+   #[test]
+   fn http_proxy_from_config() {
+      let proxy = parse_proxy("http://squid.local:3128", "alice:secret");
+      assert_eq!(proxy.kind, ProxyKind::Http);
+      assert_eq!(proxy.url(), "http://alice:secret@squid.local:3128");
+      let bare = parse_proxy("squid.local", "");
+      assert_eq!(bare.url(), "http://squid.local:8080");
+   }
+
+   #[test]
+   fn api_headers_look_like_an_xhr() {
+      let mut headers = HeaderMap::new();
+      headers.insert(header::ACCEPT, HeaderValue::from_static("text/html"));
+      headers.insert("upgrade-insecure-requests", HeaderValue::from_static("1"));
+      headers.insert("sec-fetch-user", HeaderValue::from_static("?1"));
+      headers.insert("sec-fetch-mode", HeaderValue::from_static("navigate"));
+      headers.insert("sec-ch-ua", HeaderValue::from_static("\"Chromium\";v=\"151\""));
+      shape_headers(&mut headers, Purpose::Api, &HeaderMap::new());
+      assert_eq!(headers.get(header::ACCEPT).unwrap(), "*/*");
+      assert_eq!(headers.get("sec-fetch-mode").unwrap(), "cors");
+      assert!(headers.get("upgrade-insecure-requests").is_none());
+      assert!(headers.get("sec-fetch-user").is_none());
+      assert_eq!(headers.get("sec-ch-ua").unwrap(), "\"Chromium\";v=\"151\"");
+      assert_eq!(headers.get(header::REFERER).unwrap(), "https://x.com/");
+   }
+
+   #[test]
+   fn safari_gets_no_fetch_metadata_it_never_sends() {
+      let mut headers = HeaderMap::new();
+      headers.insert(header::ACCEPT, HeaderValue::from_static("text/html"));
+      shape_headers(&mut headers, Purpose::Api, &HeaderMap::new());
+      assert!(headers.get("sec-fetch-mode").is_none());
+      assert!(headers.get("sec-fetch-dest").is_none());
    }
 }

@@ -80,9 +80,7 @@ impl ApiClient {
       for attempt in 0..3_u8 {
          match self.clear_session_filters(session_id).await {
             Ok(()) => return Ok(()),
-            Err(err)
-               if attempt < 2 && err.to_string().contains("SOCKS5") =>
-            {
+            Err(err) if attempt < 2 && err.to_string().contains("connect") => {
                last_err = Some(err);
                sleep(Duration::from_secs(1)).await;
             },
@@ -125,7 +123,7 @@ impl ApiClient {
          .get_on(
             endpoints::VERIFY_CREDENTIALS_URL,
             &headers,
-            self.proxy_for(session).as_ref(),
+            Some(&self.egress_for(session)),
          )
          .await?;
       let (bytes, _) = self
@@ -159,7 +157,7 @@ impl ApiClient {
             endpoints::ACCOUNT_SETTINGS_URL,
             &headers,
             Bytes::from_static(DISPLAY_SENSITIVE_BODY.as_bytes()),
-            self.proxy_for(session).as_ref(),
+            Some(&self.egress_for(session)),
          )
          .await?;
       let (bytes, _) = self
@@ -195,7 +193,7 @@ impl ApiClient {
             endpoints::UPDATE_PROFILE_URL,
             &headers,
             Bytes::from_static(ADULT_BIRTHDATE_BODY.as_bytes()),
-            self.proxy_for(session).as_ref(),
+            Some(&self.egress_for(session)),
          )
          .await?;
       let bytes = match self
@@ -230,7 +228,7 @@ impl ApiClient {
             &url,
             &headers,
             Bytes::from_static(SEARCH_SAFETY_BODY.as_bytes()),
-            self.proxy_for(session).as_ref(),
+            Some(&self.egress_for(session)),
          )
          .await?;
       let _ = self

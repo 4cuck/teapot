@@ -2,10 +2,22 @@ use super::*;
 
 // ── GraphQL response envelope types ─────────────────────────────────────
 
-/// Top-level GraphQL response wrapper. Every endpoint returns `{data: T}`.
+/// Top-level GraphQL response wrapper. Every endpoint returns `{data: T}`,
+/// with `errors` alongside or instead of it when something went wrong.
 #[derive(Deserialize)]
 pub struct GqlResponse<T> {
-   pub data: T,
+   pub data:   Option<T>,
+   #[serde(default)]
+   pub errors: Vec<ApiError>,
+}
+
+/// One entry of X's `errors` array.
+#[derive(Deserialize)]
+pub struct ApiError {
+   #[serde(default)]
+   pub code:    i64,
+   #[serde(default)]
+   pub message: String,
 }
 
 // ── X Spaces ──

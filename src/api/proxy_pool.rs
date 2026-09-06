@@ -18,6 +18,7 @@ use tokio::{
       lookup_host,
    },
    process::Command,
+   task::JoinSet,
    time::{
       Instant,
       timeout,
@@ -163,12 +164,11 @@ impl ProxyPool {
          .find(|endpoint| endpoint.port == port)
          .unwrap_or(&self.endpoints[0]);
       ProxyConfig {
-         host:       self.connect_host.clone(),
-         port:       endpoint.port,
-         kind:       ProxyKind::Socks5,
-         auth:       None,
-         socks_user: Some(endpoint.username.clone()),
-         socks_pass: Some(endpoint.password.clone()),
+         host:     self.connect_host.clone(),
+         port:     endpoint.port,
+         kind:     ProxyKind::Socks5,
+         username: Some(endpoint.username.clone()),
+         password: Some(endpoint.password.clone()),
       }
    }
 }
@@ -240,9 +240,17 @@ async fn pick_fastest_host(hostname: &str, probe_port: u16) -> String {
       return hostname.to_owned();
    }
 
-   let mut best: Option<(IpAddr, f64)> = None;
+   // Probed together: run one after another, six addresses held the listener
+   // back for twelve seconds on every restart while requests piled up.
+   let mut probes = JoinSet::new();
    for ip in ips {
-      let rtt = probe_ip(ip, probe_port).await;
+      probes.spawn(async move { (ip, probe_ip(ip, probe_port).await) });
+   }
+   let mut best: Option<(IpAddr, f64)> = None;
+   while let Some(joined) = probes.join_next().await {
+      let Ok((ip, rtt)) = joined else {
+         continue;
+      };
       tracing::info!(%ip, rtt_ms = ?rtt, "SOCKS5 probe");
       let Some(ms) = rtt else {
          continue;
