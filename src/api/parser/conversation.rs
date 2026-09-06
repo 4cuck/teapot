@@ -50,6 +50,7 @@ pub fn parse_conversation(
    let mut before = Chain::default();
    let mut after = Chain::default();
    let mut replies = PaginatedResult::<Chain>::default();
+   let mut show_more = Option::<String>::None;
 
    // Parse tweet_id for matching
    let target_id = tweet_id.parse().unwrap_or(0);
@@ -147,6 +148,8 @@ pub fn parse_conversation(
                   replies.bottom = Some(cursor_value.to_owned());
                } else if entry_id.contains("top") {
                   replies.top = Some(cursor_value.to_owned());
+               } else if entry_id.contains("showmorethreads") {
+                  show_more = Some(cursor_value.to_owned());
                }
             }
          }
@@ -159,6 +162,15 @@ pub fn parse_conversation(
    // count is well below the typical first-page size.
    if !has_cursor && replies.content.len() < MIN_REPLIES_FOR_CURSOR {
       replies.bottom = None;
+   }
+
+   // Once the ranked replies run out X stops sending a bottom cursor and
+   // folds the rest behind "Show more replies". That cursor pages the same
+   // way, so it continues the list where the bottom cursor would; unlike a
+   // bottom cursor it is only sent when there really is more, so it survives
+   // the dead-cursor check above.
+   if replies.bottom.is_none() {
+      replies.bottom = show_more;
    }
 
    // Paginated requests (with cursor) don't include the main tweet in the
