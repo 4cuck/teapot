@@ -174,6 +174,22 @@ Videos can be played directly in Discord embeds using `twitter:player` meta tags
 
 All images include `og:image:width` and `og:image:height` meta tags for proper layout.
 
+## Donate
+
+Running the public instance costs money for servers, bandwidth and the
+accounts and exits that keep it working. If nitter.cf is useful to you,
+donations help keep it online. Nothing is required.
+
+| Coin | Address |
+| ---- | ------- |
+| BTC  | `bc1qtm4rep7kyp2p28hlkfktpnd0j7uew47vnt2mev` |
+| LTC  | `ltc1q9xlaysse0mpfwf025esd69kt9zu3md22gh23du` |
+| ETH  | `0x6abA18D203520c8F90ca63eE7426a7bC345D98e6` |
+| SOL  | `E5ekoiauCR8yiNp451dmuPzhUxo84P5x3m9WJBK5kxZe` |
+| XRP  | `r3jYXNdMk2Vz5hXhKCKE9re8uz93JQFG1r` |
+| DOGE | `DSBq5jRWkiwmEh1G7zBwmQDgRkvRr61fmb` |
+| XMR  | `85CTwq5wGjWZw5GgzgwZPrHyZxpLXMK5oZSSSk5j4x9w1bpqzisaWAUZYaAPfh6rP2MZJcaFqF1XmEzkw6YCqJSS2Txu6Z8` |
+
 ## License
 
 [GNU Affero General Public License v3.0](LICENSE)

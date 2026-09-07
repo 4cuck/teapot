@@ -14,7 +14,7 @@ use crate::{
 };
 
 pub const STYLE_CSS: &str = "/css/style.css?teapawt5";
-pub const CLEAN_CSS: &str = "/css/clean.css?teapawt8";
+pub const CLEAN_CSS: &str = "/css/clean.css?teapawt9";
 pub const FONTELLO_CSS: &str = "/css/fontello.css";
 
 /// Builder for rendering a full page layout.

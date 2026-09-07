@@ -29,6 +29,20 @@ const HOME_DESCRIPTION: &str = "nitter.cf is a public Nitter replacement — a p
 const ABOUT_DESCRIPTION: &str = "About nitter.cf, a public Nitter replacement. After nitter.net shut down, this teapawt instance lets you browse Twitter/X without JavaScript or tracking.";
 const HOME_JSON_LD: &str = r#"{"@context":"https://schema.org","@type":"WebSite","name":"nitter.cf","alternateName":["Nitter","teapawt","xitter.cf"],"url":"https://nitter.cf/","description":"Public Nitter replacement. nitter.net shut down; nitter.cf is a privacy-focused Twitter/X frontend.","sameAs":["https://xitter.cf"]}"#;
 
+/// Wallets that keep the instance running, shown on the About page.
+const DONATION_ADDRESSES: &[(&str, &str)] = &[
+   ("BTC", "bc1qtm4rep7kyp2p28hlkfktpnd0j7uew47vnt2mev"),
+   ("LTC", "ltc1q9xlaysse0mpfwf025esd69kt9zu3md22gh23du"),
+   ("ETH", "0x6abA18D203520c8F90ca63eE7426a7bC345D98e6"),
+   ("SOL", "E5ekoiauCR8yiNp451dmuPzhUxo84P5x3m9WJBK5kxZe"),
+   ("XRP", "r3jYXNdMk2Vz5hXhKCKE9re8uz93JQFG1r"),
+   ("DOGE", "DSBq5jRWkiwmEh1G7zBwmQDgRkvRr61fmb"),
+   (
+      "XMR",
+      "85CTwq5wGjWZw5GgzgwZPrHyZxpLXMK5oZSSSk5j4x9w1bpqzisaWAUZYaAPfh6rP2MZJcaFqF1XmEzkw6YCqJSS2Txu6Z8",
+   ),
+];
+
 /// The pages teapawt serves itself rather than fetching from X.
 pub fn router() -> Router<AppState> {
    Router::new()
@@ -133,6 +147,21 @@ async fn about(State(state): State<AppState>, jar: CookieJar) -> impl IntoRespon
                "JavaScript while retaining your privacy. In addition to respecting your privacy, teapawt is on "
                "average around 15 times lighter than Twitter, and in most cases serves pages faster "
                "(eg. timelines load 2-4x faster)."
+           }
+
+           h2 { "Donate" }
+           p {
+               "Running a public instance costs money for servers, bandwidth and the accounts "
+               "and exits that keep it working. If nitter.cf is useful to you, donations help keep "
+               "it online. Nothing is required."
+           }
+           ul class="donate-list" {
+               @for &(coin, address) in DONATION_ADDRESSES {
+                   li {
+                       strong { (coin) }
+                       code { (address) }
+                   }
+               }
            }
 
            h2 { "Instance info" }

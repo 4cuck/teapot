@@ -1516,3 +1516,34 @@ input[type="text"], input[type="date"], input[type="number"], select {
   object-fit: cover;
   flex-basis: auto;
 }
+
+/* Donation addresses on the About page: one wallet per row, addresses in
+   monospace and allowed to wrap so the long ones fit narrow screens. */
+.overlay-panel .donate-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 14px;
+}
+.overlay-panel .donate-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border_grey);
+}
+.overlay-panel .donate-list li:last-child {
+  border-bottom: 0;
+}
+.overlay-panel .donate-list strong {
+  flex: 0 0 3.2em;
+  color: var(--accent);
+}
+.overlay-panel .donate-list code {
+  flex: 1 1 0;
+  min-width: 0;
+  word-break: break-all;
+  user-select: all;
+  font-size: 0.9em;
+  color: var(--fg_color);
+}
