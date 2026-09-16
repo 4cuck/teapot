@@ -7,6 +7,8 @@ hostname           = "localhost"
 httpMaxConnections = 100
 https              = false       # Set to true when using HTTPS
 port               = 8080
+# Needed especially if teapot is behind a reverse proxy
+publicPort         = 443 
 staticDir          = "./public"
 title              = "teapot"
 
