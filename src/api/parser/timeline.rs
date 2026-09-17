@@ -47,18 +47,15 @@ fn parse_timeline_instructions(raw_instructions: &[Instruction]) -> Result<Timel
    let mut bottom_cursor = None;
 
    for instruction in raw_instructions {
-      // Handle moduleItems (grid modules used in media timelines)
+      // Handle moduleItems (grid modules used in media timelines).
+      // One tweet per group so render_thread does not sort the whole grid by ID.
       if let Some(ref module_items) = instruction.module_items {
-         let mut module_tweets = Vec::new();
          for item in module_items {
             if let Some(tweet_result) = item.tweet_result()
                && let Ok(tweet) = parse_tweet_object(tweet_result)
             {
-               module_tweets.push(tweet);
+               tweets.push(vec![tweet]);
             }
-         }
-         if !module_tweets.is_empty() {
-            tweets.push(module_tweets);
          }
          continue;
       }
@@ -72,10 +69,15 @@ fn parse_timeline_instructions(raw_instructions: &[Instruction]) -> Result<Timel
                if entry_id.contains("promoted") {
                   continue;
                }
-               if entry_id.starts_with("tweet-")
-                  || entry_id.contains("-conversation-")
-                  || entry_id.starts_with("profile-grid-")
-               {
+               if entry_id.starts_with("profile-grid-") {
+                  for item in entry.items() {
+                     if let Some(tweet_result) = item.tweet_result()
+                        && let Ok(tweet) = parse_tweet_object(tweet_result)
+                     {
+                        tweets.push(vec![tweet]);
+                     }
+                  }
+               } else if entry_id.starts_with("tweet-") || entry_id.contains("-conversation-") {
                   let entry_tweets = parse_timeline_entry(entry);
                   if !entry_tweets.is_empty() {
                      tweets.push(entry_tweets);
