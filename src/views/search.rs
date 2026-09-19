@@ -1,24 +1,11 @@
-use maud::{
-   Markup,
-   html,
-};
+use maud::{Markup, html};
 
-use super::timeline::{
-   render_media_view_tabs,
-   render_timeline_with_view,
-};
+use super::timeline::{render_media_view_tabs, render_timeline_with_view};
 use crate::{
    config::Config,
-   types::{
-      Prefs,
-      Tweets,
-      User,
-   },
+   types::{Prefs, Tweets, User},
    utils::formatters,
-   views::{
-      renderutils::icon,
-      user_list::render_user,
-   },
+   views::{renderutils::icon, user_list::render_user},
 };
 
 /// Search pagination URL. The Twitter cursor is opaque and must be encoded —
@@ -41,7 +28,7 @@ fn search_tab_url(query: &str, tab: &str, view: &str) -> String {
 }
 
 /// Render the empty search page (home search bar).
-pub fn render_search_page() -> Markup {
+pub fn render_search_page(extra: Option<Markup>) -> Markup {
    html! {
        section class="landing-page" aria-labelledby="landing-title" {
            div class="landing-copy" {
@@ -59,6 +46,9 @@ pub fn render_search_page() -> Markup {
                    button type="submit" { "Search" }
                }
                p class="landing-hint" { "Try a phrase, @username, or #topic" }
+           }
+           @if let Some(extra) = extra {
+               (extra)
            }
        }
    }
@@ -202,18 +192,18 @@ fn render_search_tabs(query: &str, active: &str, view: &str) -> Markup {
    reason = "SearchFilters is the canonical name"
 )]
 pub struct SearchFilters {
-   pub media:            bool,
-   pub images:           bool,
-   pub videos:           bool,
-   pub links:            bool,
-   pub news:             bool,
-   pub quote:            bool,
-   pub verified:         bool,
-   pub exclude_replies:  bool,
+   pub media: bool,
+   pub images: bool,
+   pub videos: bool,
+   pub links: bool,
+   pub news: bool,
+   pub quote: bool,
+   pub verified: bool,
+   pub exclude_replies: bool,
    pub exclude_retweets: bool,
-   pub since:            String,
-   pub until:            String,
-   pub min_faves:        String,
+   pub since: String,
+   pub until: String,
+   pub min_faves: String,
 }
 
 impl SearchFilters {

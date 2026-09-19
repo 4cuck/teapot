@@ -173,4 +173,15 @@ impl Cache {
          map.remove(key);
       }
    }
+
+   /// Keys currently stored that start with `prefix` (fresh or stale).
+   pub fn keys_with_prefix(&self, prefix: &str) -> Vec<String> {
+      let Ok(map) = self.inner.read() else {
+         return Vec::new();
+      };
+      map.keys()
+         .filter(|key| key.starts_with(prefix))
+         .cloned()
+         .collect()
+   }
 }

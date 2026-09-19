@@ -14,6 +14,7 @@ mod preferences;
 mod redirect;
 mod rss;
 mod search;
+mod seo;
 mod status;
 mod timeline;
 mod unsupported;

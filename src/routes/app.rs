@@ -8,6 +8,7 @@ use crate::AppState;
 /// `timeline`'s greedy `/{username}` must be merged before it.
 pub fn router() -> Router<AppState> {
    Router::new()
+      .merge(super::seo::router())
       .merge(super::pages::router())
       .merge(super::unsupported::router())
       .merge(super::debug::router())

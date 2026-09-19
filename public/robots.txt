@@ -1,25 +1,19 @@
-# nitter.cf is a public Nitter replacement (nitter.net shut down).
-# Crawl the instance pages. Do not spider every proxied Twitter profile —
-# those hit an upstream rate limit and are not the indexable site.
+# nitter.cf / xitter.cf — public Twitter/X frontend. Crawl everything.
+# Served dynamically by the app; this file is a fallback.
 
 User-agent: *
-Allow: /$
-Allow: /about
-Allow: /css/
-Allow: /js/
-Allow: /fonts/
-Allow: /public/
-Allow: /logo
-Allow: /favicon
-Allow: /apple-touch-icon
-Allow: /site.webmanifest
-Allow: /robots.txt
-Allow: /sitemap.xml
-Disallow: /
-Crawl-delay: 2
+Allow: /
 
-# Card unfurls when someone shares a nitter.cf link.
-User-agent: Twitterbot
-Disallow:
+User-agent: Googlebot
+Allow: /
+
+User-agent: Bingbot
+Allow: /
+
+User-agent: Yandex
+Allow: /
+
+User-agent: YandexBot
+Allow: /
 
 Sitemap: https://nitter.cf/sitemap.xml

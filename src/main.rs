@@ -192,8 +192,6 @@ async fn main() -> eyre::Result<()> {
         .route_service("/android-chrome-384x384.png", ServeFile::new(format!("{static_dir}/android-chrome-384x384.png")))
         .route_service("/android-chrome-512x512.png", ServeFile::new(format!("{static_dir}/android-chrome-512x512.png")))
         .route_service("/site.webmanifest", ServeFile::new(format!("{static_dir}/site.webmanifest")))
-        .route_service("/robots.txt", ServeFile::new(format!("{static_dir}/robots.txt")))
-        .route_service("/sitemap.xml", ServeFile::new(format!("{static_dir}/sitemap.xml")))
         .route_service("/opensearch.xml", ServeFile::new(format!("{static_dir}/opensearch.xml")))
         .layer(middleware::from_fn(routes::prefs_middleware))
         .layer(middleware::from_fn(routes::snowflake_guard))

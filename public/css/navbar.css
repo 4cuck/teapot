@@ -9,7 +9,8 @@
   margin-right: 0;
 }
 
-nav {
+nav.site-nav,
+nav:not([class]) {
   display: flex;
   align-items: center;
   position: fixed;

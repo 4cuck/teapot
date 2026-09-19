@@ -86,7 +86,8 @@ body {
   color: var(--fg_color);
 }
 
-nav {
+nav.site-nav,
+nav:not([class]) {
   background-color: var(--tp-surface-container-low);
 }
 

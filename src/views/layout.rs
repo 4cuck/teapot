@@ -1,20 +1,12 @@
 use std::sync::LazyLock;
 
-use maud::{
-   DOCTYPE,
-   Markup,
-   PreEscaped,
-   html,
-};
+use maud::{DOCTYPE, Markup, PreEscaped, html};
 use regex::Regex;
 
-use crate::{
-   config::Config,
-   types::Prefs,
-};
+use crate::{config::Config, types::Prefs};
 
-pub const STYLE_CSS: &str = "/css/style.css?teapawt5";
-pub const CLEAN_CSS: &str = "/css/clean.css?teapawt9";
+pub const STYLE_CSS: &str = "/css/style.css?teapawt6";
+pub const CLEAN_CSS: &str = "/css/clean.css?teapawt11";
 pub const FONTELLO_CSS: &str = "/css/fontello.css";
 
 /// Builder for rendering a full page layout.
@@ -23,19 +15,19 @@ pub const FONTELLO_CSS: &str = "/css/fontello.css";
    reason = "PageLayout is the canonical name"
 )]
 pub struct PageLayout<'a> {
-   config:      &'a Config,
-   title:       &'a str,
-   body:        Markup,
+   config: &'a Config,
+   title: &'a str,
+   body: Markup,
    description: &'a str,
-   prefs:       Option<&'a Prefs>,
-   rss:         &'a str,
-   canonical:   &'a str,
-   referer:     &'a str,
-   og_image:    &'a str,
-   og_type:     &'a str,
+   prefs: Option<&'a Prefs>,
+   rss: &'a str,
+   canonical: &'a str,
+   referer: &'a str,
+   og_image: &'a str,
+   og_type: &'a str,
    theme_color: &'a str,
-   head_extra:  Option<&'a Markup>,
-   custom_og:   bool,
+   head_extra: Option<&'a Markup>,
+   custom_og: bool,
 }
 
 impl<'a> PageLayout<'a> {
@@ -80,6 +72,15 @@ impl<'a> PageLayout<'a> {
    pub const fn referer(mut self, referer: &'a str) -> Self {
       self.referer = referer;
       self
+   }
+
+   /// Absolute URL of this instance page. Used for rel=canonical / og:url so
+   /// crawlers index nitter.cf instead of treating x.com as the real page.
+   fn page_url(&self) -> Option<String> {
+      if self.referer.is_empty() || !self.referer.starts_with('/') {
+         return None;
+      }
+      Some(format!("{}{}", self.config.url_prefix(), self.referer))
    }
 
    pub const fn og_image(mut self, og_image: &'a str) -> Self {
@@ -203,6 +204,19 @@ impl<'a> PageLayout<'a> {
                       meta name="description" content=(strip_html(self.description));
                   }
 
+                  meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1";
+                  meta name="googlebot" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1";
+                  meta name="bingbot" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1";
+                  meta name="yandex" content="index, follow";
+                  link rel="sitemap" type="application/xml" title="Sitemap" href="/sitemap.xml";
+
+                  @if let Some(page_url) = self.page_url() {
+                      link rel="canonical" href=(page_url);
+                      @if !self.custom_og {
+                          meta property="og:url" content=(page_url);
+                      }
+                  }
+
                   // OpenGraph meta tags
                   @if !self.custom_og {
                       meta property="og:site_name" content=(self.config.server.title);
@@ -229,7 +243,7 @@ impl<'a> PageLayout<'a> {
                       (extra)
                   }
 
-                  // Link to original x.com URL
+                  // Link to original x.com URL (navbar "Open in X" uses the same value)
                   @if !self.canonical.is_empty() {
                       link rel="alternate" href=(self.canonical) title="View on X";
                   }
@@ -272,7 +286,9 @@ const SOYJAK_ICONS: &[&str] = &[
 fn random_soyjak_icon() -> &'static str {
    let idx = std::time::SystemTime::now()
       .duration_since(std::time::UNIX_EPOCH)
-      .map_or(0, |elapsed| elapsed.subsec_nanos() as usize % SOYJAK_ICONS.len());
+      .map_or(0, |elapsed| {
+         elapsed.subsec_nanos() as usize % SOYJAK_ICONS.len()
+      });
    SOYJAK_ICONS[idx]
 }
 
@@ -294,7 +310,7 @@ pub fn render_navbar_full(config: &Config, rss: &str, canonical: &str, referer: 
    };
 
    html! {
-       nav {
+       nav class="site-nav" {
            div class="inner-nav" {
                div class="nav-item" {
                    a class="site-brand" href="/" {
@@ -337,13 +353,17 @@ pub fn render_navbar_full(config: &Config, rss: &str, canonical: &str, referer: 
 
 /// Render error page.
 pub fn render_error(config: &Config, title: &str, message: &str) -> Markup {
-   PageLayout::new(config, title, html! {
-       div class="panel-container" {
-           div class="error-panel" {
-               span { (message) }
-           }
-       }
-   })
+   PageLayout::new(
+      config,
+      title,
+      html! {
+          div class="panel-container" {
+              div class="error-panel" {
+                  span { (message) }
+              }
+          }
+      },
+   )
    .description(message)
    .render()
 }

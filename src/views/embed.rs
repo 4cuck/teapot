@@ -1,36 +1,15 @@
 use std::fmt::Write as _;
 
-use maud::{
-   DOCTYPE,
-   Markup,
-   html,
-};
+use maud::{DOCTYPE, Markup, html};
 use serde::Serialize;
 use time::format_description::well_known::Rfc3339;
 
-use super::{
-   layout::strip_html,
-   renderutils::community_note_to_html,
-   tweet::TweetRenderer,
-};
+use super::{layout::strip_html, renderutils::community_note_to_html, tweet::TweetRenderer};
 use crate::{
-   config::{
-      Config,
-      GifTranscodingMode,
-   },
-   types::{
-      CardKind,
-      Gif,
-      Photo,
-      Prefs,
-      Tweet,
-      Video,
-   },
+   config::{Config, GifTranscodingMode},
+   types::{CardKind, Gif, Photo, Prefs, Tweet, Video},
    utils::{
-      entity_expander::{
-         expand_entities_for_x,
-         html_escape,
-      },
+      entity_expander::{expand_entities_for_x, html_escape},
       formatters,
    },
 };
@@ -119,10 +98,10 @@ fn gif_source_with_quote(tweet: &Tweet) -> Option<(&Tweet, &Gif)> {
 
 struct VideoEmbedMedia<'a> {
    thumbnail_url: &'a str,
-   stream_url:    &'a str,
-   width:         i32,
-   height:        i32,
-   is_gif:        bool,
+   stream_url: &'a str,
+   width: i32,
+   height: i32,
+   is_gif: bool,
 }
 
 fn video_embed_media(tweet: &Tweet) -> Option<VideoEmbedMedia<'_>> {
@@ -145,10 +124,10 @@ fn video_embed_media(tweet: &Tweet) -> Option<VideoEmbedMedia<'_>> {
    }
    Some(VideoEmbedMedia {
       thumbnail_url: gif.thumb.as_str(),
-      stream_url:    gif.url.as_str(),
-      width:         480,
-      height:        480,
-      is_gif:        true,
+      stream_url: gif.url.as_str(),
+      width: 480,
+      height: 480,
+      is_gif: true,
    })
 }
 
@@ -581,7 +560,8 @@ pub fn render_video_embed(tweet: &Tweet, config: &Config) -> Markup {
    }
 }
 
-#[path = "embed_activity.rs"] mod activity;
+#[path = "embed_activity.rs"]
+mod activity;
 pub use activity::*;
 /// Render a full status page with OG meta tags, video embeds, and
 /// `ActivityPub` discovery. Uses [`super::layout::PageLayout`] with custom
@@ -610,12 +590,12 @@ pub fn render_status_page(
    };
    let canonical = format!("https://x.com/{username}/status/{id}");
    let referer = format!("/{username}/status/{id}");
+   let page_url = format!("{url_prefix}/{username}/status/{id}");
 
    let avatar_url = formatters::get_pic_url(&tweet.user.user_pic, config.config.base64_media);
 
    let head_extra = html! {
-       link rel="canonical" href=(canonical);
-       meta property="og:url" content=(canonical);
+       meta property="og:url" content=(page_url);
        meta property="twitter:site" content=(format!("@{}", tweet.user.username));
        meta property="twitter:creator" content=(format!("@{}", tweet.user.username));
        meta property="twitter:title" content=(og_title);

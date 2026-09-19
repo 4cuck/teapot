@@ -3,31 +3,52 @@
 use axum::{
    Router,
    extract::State,
-   response::{
-      Html,
-      IntoResponse,
-      Redirect,
-   },
+   response::{Html, IntoResponse, Redirect},
    routing::get,
 };
 use axum_extra::extract::CookieJar;
-use maud::{
-   PreEscaped,
-   html,
-};
+use maud::{PreEscaped, html};
 
 use crate::{
    AppState,
    types::Prefs,
-   views::{
-      layout::PageLayout,
-      search as search_view,
-   },
+   views::{layout::PageLayout, search as search_view},
 };
 
 const HOME_DESCRIPTION: &str = "nitter.cf is a public Nitter replacement — a privacy-focused Twitter/X frontend. nitter.net shut down; this instance is a drop-in successor.";
 const ABOUT_DESCRIPTION: &str = "About nitter.cf, a public Nitter replacement. After nitter.net shut down, this teapawt instance lets you browse Twitter/X without JavaScript or tracking.";
-const HOME_JSON_LD: &str = r#"{"@context":"https://schema.org","@type":"WebSite","name":"nitter.cf","alternateName":["Nitter","teapawt","xitter.cf"],"url":"https://nitter.cf/","description":"Public Nitter replacement. nitter.net shut down; nitter.cf is a privacy-focused Twitter/X frontend.","sameAs":["https://xitter.cf"]}"#;
+const HOME_JSON_LD: &str = r#"{"@context":"https://schema.org","@type":"WebSite","name":"nitter.cf","alternateName":["Nitter","teapawt","xitter.cf"],"url":"https://nitter.cf/","description":"Public Nitter replacement. nitter.net shut down; nitter.cf is a privacy-focused Twitter/X frontend.","sameAs":["https://xitter.cf"],"potentialAction":{"@type":"SearchAction","target":{"@type":"EntryPoint","urlTemplate":"https://nitter.cf/search?f=tweets&q={search_term_string}"},"query-input":"required name=search_term_string"}}"#;
+
+/// High-traffic public accounts linked from the homepage so crawlers discover
+/// profile URLs immediately instead of waiting for the sitemap.
+const HOME_PROFILES: &[&str] = &[
+   "elonmusk",
+   "nasa",
+   "spacex",
+   "openai",
+   "google",
+   "microsoft",
+   "apple",
+   "youtube",
+   "bbc",
+   "cnn",
+   "nytimes",
+   "reuters",
+   "POTUS",
+   "WhiteHouse",
+   "UN",
+   "WHO",
+   "MrBeast",
+   "MKBHD",
+   "lexfridman",
+   "natgeo",
+   "espn",
+   "nba",
+   "nfl",
+   "github",
+   "rustlang",
+   "wikipedia",
+];
 
 /// Wallets that keep the instance running, shown on the About page.
 const DONATION_ADDRESSES: &[(&str, &str)] = &[
@@ -54,11 +75,31 @@ pub fn router() -> Router<AppState> {
 
 async fn home(State(state): State<AppState>, jar: CookieJar) -> impl IntoResponse {
    let prefs = Prefs::from_cookies(&jar, &state.config);
-   let content = search_view::render_search_page();
+   let hub = html! {
+       section class="landing-hub" aria-label="Popular profiles" {
+           h2 { "Browse public profiles" }
+           p { "Every public timeline is crawlable. Start with these, or search any @username." }
+           ul class="landing-hub-list" {
+               @for handle in HOME_PROFILES {
+                   li {
+                       a href=(format!("/{handle}")) { "@" (handle) }
+                   }
+               }
+           }
+           p class="landing-hub-more" {
+               a href="/about" { "About this instance" }
+               " · "
+               a href="/search" { "Search posts" }
+               " · "
+               a href="/sitemap.xml" { "Sitemap" }
+           }
+       }
+   };
+   let content = html! {
+       (search_view::render_search_page(Some(hub)))
+   };
    let head = html! {
-       link rel="canonical" href="https://nitter.cf/";
        meta property="og:type" content="website";
-       meta property="og:url" content="https://nitter.cf/";
        script type="application/ld+json" {
            (PreEscaped(HOME_JSON_LD))
        }
@@ -67,6 +108,7 @@ async fn home(State(state): State<AppState>, jar: CookieJar) -> impl IntoRespons
    let markup = PageLayout::new(&state.config, "nitter.cf — Nitter replacement", content)
       .description(HOME_DESCRIPTION)
       .prefs(&prefs)
+      .referer("/")
       .head_extra(&head)
       .render();
    Html(markup.into_string())
@@ -75,9 +117,7 @@ async fn home(State(state): State<AppState>, jar: CookieJar) -> impl IntoRespons
 async fn about(State(state): State<AppState>, jar: CookieJar) -> impl IntoResponse {
    let prefs = Prefs::from_cookies(&jar, &state.config);
    let head = html! {
-       link rel="canonical" href="https://nitter.cf/about";
        meta property="og:type" content="website";
-       meta property="og:url" content="https://nitter.cf/about";
    };
    let content = html! {
        div class="overlay-panel" {
@@ -174,6 +214,7 @@ async fn about(State(state): State<AppState>, jar: CookieJar) -> impl IntoRespon
    let markup = PageLayout::new(&state.config, "About nitter.cf", content)
       .description(ABOUT_DESCRIPTION)
       .prefs(&prefs)
+      .referer("/about")
       .head_extra(&head)
       .render();
    Html(markup.into_string())
