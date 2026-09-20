@@ -364,6 +364,8 @@ fn find_themes(static_dir: &str) -> Vec<String> {
             "Black".to_owned(),
             "Dracula".to_owned(),
             "Mastodon".to_owned(),
+            "Nord Dark".to_owned(),
+            "Nord Light".to_owned(),
             "teapot".to_owned(),
             "Pleroma".to_owned(),
             "Twitter".to_owned(),
