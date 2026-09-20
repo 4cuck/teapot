@@ -373,8 +373,11 @@ const SEED_PROFILES: &[&str] = &[
    "SpotifyCharts",
 ];
 
-/// Profile paths worth listing for each handle.
-const PROFILE_PATHS: &[&str] = &["", "/with_replies", "/media", "/search"];
+/// Only the profile root. Tab URLs (`/media`, `/with_replies`, …) are linked
+/// from the profile itself; listing them here 4×’d the file until Cloudflare
+/// 520’d Googlebot.
+const PROFILE_PATHS: &[&str] = &[""];
+const XML_CONTENT_TYPE: &str = "text/xml; charset=utf-8";
 
 pub fn router() -> Router<AppState> {
    Router::new()
@@ -384,25 +387,10 @@ pub fn router() -> Router<AppState> {
       .route("/sitemap-profiles.xml", get(sitemap_profiles))
 }
 
-fn public_origin(headers: &HeaderMap, config: &Config) -> String {
-   let forwarded = headers
-      .get("x-forwarded-host")
-      .and_then(|value| value.to_str().ok())
-      .and_then(|value| value.split(',').next())
-      .map(str::trim);
-   let host = forwarded
-      .or_else(|| {
-         headers
-            .get(header::HOST)
-            .and_then(|value| value.to_str().ok())
-            .map(|value| value.split(':').next().unwrap_or(value))
-      })
-      .unwrap_or(config.server.hostname.as_str());
-   if host.is_empty() || host == "127.0.0.1" || host == "localhost" {
-      config.url_prefix().to_owned()
-   } else {
-      format!("https://{host}")
-   }
+/// Sitemap and robots loc URLs always use the configured public host
+/// (`nitter.cf`) so www / xitter responses don't split Google's property.
+fn public_origin(_headers: &HeaderMap, config: &Config) -> String {
+   config.url_prefix().trim_end_matches('/').to_owned()
 }
 
 fn text_response(body: String, content_type: &'static str) -> Response {
@@ -625,7 +613,7 @@ async fn sitemap_index(State(state): State<AppState>, headers: HeaderMap) -> Res
 </sitemapindex>
 "
    );
-   text_response(body, "application/xml; charset=utf-8")
+   text_response(body, XML_CONTENT_TYPE)
 }
 
 async fn sitemap_static(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -634,11 +622,7 @@ async fn sitemap_static(State(state): State<AppState>, headers: HeaderMap) -> Re
    let static_paths = [
       ("/", "daily", "1.0"),
       ("/about", "weekly", "0.9"),
-      ("/explore", "weekly", "0.4"),
-      ("/help", "weekly", "0.4"),
       ("/search", "hourly", "0.8"),
-      ("/robots.txt", "daily", "0.2"),
-      ("/sitemap.xml", "hourly", "0.2"),
    ];
    let mut body =
       String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
@@ -651,7 +635,7 @@ async fn sitemap_static(State(state): State<AppState>, headers: HeaderMap) -> Re
       ));
    }
    body.push_str("</urlset>\n");
-   text_response(body, "application/xml; charset=utf-8")
+   text_response(body, XML_CONTENT_TYPE)
 }
 
 fn collect_profile_usernames(state: &AppState) -> BTreeSet<String> {
@@ -716,5 +700,5 @@ async fn sitemap_profiles(State(state): State<AppState>, headers: HeaderMap) -> 
       }
    }
    body.push_str("</urlset>\n");
-   text_response(body, "application/xml; charset=utf-8")
+   text_response(body, XML_CONTENT_TYPE)
 }

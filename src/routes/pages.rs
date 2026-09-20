@@ -125,9 +125,7 @@ async fn about(State(state): State<AppState>, jar: CookieJar) -> impl IntoRespon
 
            p {
                strong { "nitter.cf" }
-               " is a public "
-               a href="https://github.com/zedeus/nitter" { "Nitter" }
-               " replacement — a privacy-focused Twitter/X frontend. "
+               " is a public Nitter replacement — a privacy-focused Twitter/X frontend. "
                "nitter.net shut down; this instance is meant as a drop-in successor. "
                "Same URL style ("
                code { "/username" }
@@ -142,9 +140,7 @@ async fn about(State(state): State<AppState>, jar: CookieJar) -> impl IntoRespon
            p {
                "This site runs "
                a href="https://github.com/4cuck/teapot" { "teapawt" }
-               ", a privacy-focused Twitter/X frontend forked from "
-               a href="https://github.com/amaanq/teapot" { "teapot" }
-               "."
+               ", a privacy-focused Twitter/X frontend."
            }
 
            ul {
@@ -157,14 +153,6 @@ async fn about(State(state): State<AppState>, jar: CookieJar) -> impl IntoRespon
                li { "Themes" }
                li { "Mobile support (responsive design)" }
                li { "AGPLv3 licensed, no proprietary instances permitted" }
-           }
-
-           p {
-               "Upstream teapot's GitHub wiki contains "
-               a href="https://github.com/amaanq/teapot/wiki/Instances" { "instances" }
-               " and "
-               a href="https://github.com/amaanq/teapot/wiki/Extensions" { "browser extensions" }
-               " maintained by the community."
            }
 
            h2 { "Why use teapawt?" }
