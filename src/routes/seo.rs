@@ -373,10 +373,8 @@ const SEED_PROFILES: &[&str] = &[
    "SpotifyCharts",
 ];
 
-/// Only the profile root. Tab URLs (`/media`, `/with_replies`, …) are linked
-/// from the profile itself; listing them here 4×’d the file until Cloudflare
-/// 520’d Googlebot.
-const PROFILE_PATHS: &[&str] = &[""];
+/// Profile paths worth listing for each handle.
+const PROFILE_PATHS: &[&str] = &["", "/with_replies", "/media", "/search"];
 const XML_CONTENT_TYPE: &str = "text/xml; charset=utf-8";
 
 pub fn router() -> Router<AppState> {
@@ -622,7 +620,11 @@ async fn sitemap_static(State(state): State<AppState>, headers: HeaderMap) -> Re
    let static_paths = [
       ("/", "daily", "1.0"),
       ("/about", "weekly", "0.9"),
+      ("/explore", "weekly", "0.4"),
+      ("/help", "weekly", "0.4"),
       ("/search", "hourly", "0.8"),
+      ("/robots.txt", "daily", "0.2"),
+      ("/sitemap.xml", "hourly", "0.2"),
    ];
    let mut body =
       String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
