@@ -58,8 +58,9 @@ debugToken = ""
 proxy     = ""
 proxyAuth = ""
 
-# HTTP/HTTPS proxy URL used only for X API requests, e.g. http://localhost:7000
-# Ignored when socksProxiesFile is set.
+# Residential HTTP proxy tried only after a direct request gets an HTML 429.
+# Account quota (a JSON 429) stays on the direct path. proxyAuth is the
+# user:pass for this URL.
 apiProxy = ""
 
 # SOCKS5 list (`host:port:user:pass`, one per line). Each cookie session is

@@ -15,12 +15,20 @@ use std::{
    sync::{
       Arc,
       Mutex,
+      atomic::{
+         AtomicU64,
+         Ordering,
+      },
    },
    task::{
       Context,
       Poll,
    },
-   time::Duration,
+   time::{
+      Duration,
+      SystemTime,
+      UNIX_EPOCH,
+   },
 };
 
 use axum::http::{
@@ -57,6 +65,9 @@ const POOL_IDLE: Duration = Duration::from_secs(300);
 const POOL_PER_HOST: usize = 4;
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(45);
 const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(15);
+/// After an HTML 429, skip the direct IP this long and use the residential
+/// proxy immediately so the next requests do not wait on another block page.
+const DIRECT_BLOCK_FOR: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProxyKind {
@@ -139,11 +150,18 @@ impl Purpose {
    reason = "HttpClient is clearer than Client"
 )]
 pub struct HttpClient {
-   purpose:       Purpose,
-   default:       primp::Client,
-   default_proxy: Option<ProxyConfig>,
-   extra_headers: HeaderMap,
-   sessions:      Arc<Mutex<HashMap<i64, primp::Client>>>,
+   purpose:        Purpose,
+   default:        primp::Client,
+   default_proxy:  Option<ProxyConfig>,
+   /// Used only after the direct exit returns an HTML 429, or while that
+   /// block is still fresh.
+   fallback_proxy: Option<ProxyConfig>,
+   /// Unix millis until which the direct exit is skipped.
+   direct_blocked_until: Arc<AtomicU64>,
+   extra_headers:  HeaderMap,
+   /// Keyed by session and exit so a direct client is never reused for the
+   /// fallback proxy.
+   sessions:       Arc<Mutex<HashMap<(i64, u64), primp::Client>>>,
 }
 
 /// Response wrapper providing convenience methods.
@@ -163,6 +181,7 @@ impl HttpClient {
          default_proxy.as_ref(),
          purpose,
          &extra_headers,
+         POOL_PER_HOST,
       )
       .unwrap_or_else(|err| {
          tracing::error!("browser client for the default identity failed to build: {err}");
@@ -177,9 +196,26 @@ impl HttpClient {
          purpose,
          default,
          default_proxy,
+         fallback_proxy: None,
+         direct_blocked_until: Arc::new(AtomicU64::new(0)),
          extra_headers,
          sessions: Arc::new(Mutex::new(HashMap::new())),
       }
+   }
+
+   /// Proxy used only when a direct request is answered with an HTML 429.
+   #[must_use]
+   pub fn with_fallback_proxy(mut self, proxy_url: &str, proxy_auth: &str) -> Self {
+      if !proxy_url.is_empty() {
+         let proxy = parse_proxy(proxy_url, proxy_auth);
+         tracing::info!(
+            host = %proxy.host,
+            port = proxy.port,
+            "residential proxy is the fallback for HTML 429s"
+         );
+         self.fallback_proxy = Some(proxy);
+      }
+      self
    }
 
    /// Headers added to every request this client makes.
@@ -204,6 +240,7 @@ impl HttpClient {
          self.default_proxy.as_ref(),
          self.purpose,
          &self.extra_headers,
+         POOL_PER_HOST,
       ) {
          Ok(client) => self.default = client,
          Err(err) => tracing::error!("browser client for the default identity failed to build: {err}"),
@@ -216,21 +253,51 @@ impl HttpClient {
       let Some(egress) = via else {
          return Ok(self.default.clone());
       };
+      let key = (egress.session, proxy_tag(egress.proxy.as_ref()));
       if let Some(client) = self
          .sessions
          .lock()
          .ok()
-         .and_then(|clients| clients.get(&egress.session).cloned())
+         .and_then(|clients| clients.get(&key).cloned())
       {
          return Ok(client);
       }
       let identity = browser::identity_for(egress.session);
-      let client = build_client(identity, egress.proxy.as_ref(), self.purpose, &self.extra_headers)?;
+      let idle = if self.is_fallback(egress.proxy.as_ref()) {
+         // A new connection asks the residential proxy for a new exit IP.
+         0
+      } else {
+         POOL_PER_HOST
+      };
+      let client = build_client(
+         identity,
+         egress.proxy.as_ref(),
+         self.purpose,
+         &self.extra_headers,
+         idle,
+      )?;
       tracing::debug!(session_id = egress.session, %identity, "browser client built");
       if let Ok(mut clients) = self.sessions.lock() {
-         clients.entry(egress.session).or_insert_with(|| client.clone());
+         clients.entry(key).or_insert_with(|| client.clone());
       }
       Ok(client)
+   }
+
+   fn is_fallback(&self, proxy: Option<&ProxyConfig>) -> bool {
+      match (proxy, self.fallback_proxy.as_ref()) {
+         (Some(proxy), Some(fallback)) => proxy.host == fallback.host && proxy.port == fallback.port,
+         _ => false,
+      }
+   }
+
+   fn direct_is_blocked(&self) -> bool {
+      let until = self.direct_blocked_until.load(Ordering::Relaxed);
+      until > unix_millis()
+   }
+
+   fn block_direct(&self) {
+      let until = unix_millis().saturating_add(DIRECT_BLOCK_FOR.as_millis() as u64);
+      self.direct_blocked_until.fetch_max(until, Ordering::Relaxed);
    }
 
    /// Send a GET request.
@@ -299,6 +366,55 @@ impl HttpClient {
       body: Bytes,
       via: Option<&Egress>,
    ) -> Result<Response> {
+      let direct = via.is_some_and(|egress| egress.proxy.is_none());
+      let skip_direct = direct && self.fallback_proxy.is_some() && self.direct_is_blocked();
+      let proxied;
+      let first_via = if skip_direct {
+         proxied = Egress {
+            session: via.expect("direct egress").session,
+            proxy:   self.fallback_proxy.clone(),
+         };
+         Some(&proxied)
+      } else {
+         via
+      };
+
+      let first = self
+         .dispatch(&method, uri, extra_headers, &body, first_via)
+         .await;
+      // Already on a proxy, or this client has no residential fallback.
+      if !direct || self.fallback_proxy.is_none() || skip_direct {
+         return first;
+      }
+      let blocked = match &first {
+         Ok(response) if is_edge_block(response.status(), response.headers()) => true,
+         Err(err) if is_idempotent(&method) && is_direct_failure(err) => true,
+         _ => false,
+      };
+      if !blocked {
+         return first;
+      }
+      if matches!(&first, Ok(response) if is_edge_block(response.status(), response.headers())) {
+         self.block_direct();
+      }
+      tracing::warn!(uri, "direct exit blocked, retrying through the residential proxy");
+      let proxied = Egress {
+         session: via.expect("direct egress").session,
+         proxy:   self.fallback_proxy.clone(),
+      };
+      self
+         .dispatch(&method, uri, extra_headers, &body, Some(&proxied))
+         .await
+   }
+
+   async fn dispatch(
+      &self,
+      method: &Method,
+      uri: &str,
+      extra_headers: &HeaderMap,
+      body: &Bytes,
+      via: Option<&Egress>,
+   ) -> Result<Response> {
       let client = self.client_for(via)?;
       let send = || {
          let mut request = client
@@ -315,7 +431,7 @@ impl HttpClient {
          // first write ("broken pipe", "connection reset") rather than with a
          // GOAWAY the client would retry itself. Safe to repeat for requests
          // that change nothing.
-         Err(err) if is_idempotent(&method) && is_transport_blip(&err) => {
+         Err(err) if is_idempotent(method) && is_transport_blip(&err) => {
             tracing::debug!(uri, "retrying after transport error: {}", describe(err));
             send().await.map_err(describe)?
          },
@@ -338,6 +454,7 @@ fn build_client(
    proxy: Option<&ProxyConfig>,
    purpose: Purpose,
    extra_headers: &HeaderMap,
+   idle_per_host: usize,
 ) -> Result<primp::Client> {
    let mut builder = primp::Client::builder()
       .impersonate(identity.profile())
@@ -347,7 +464,7 @@ fn build_client(
       .timeout(purpose.timeout())
       .read_timeout(BODY_IDLE_TIMEOUT)
       .pool_idle_timeout(POOL_IDLE)
-      .pool_max_idle_per_host(POOL_PER_HOST)
+      .pool_max_idle_per_host(idle_per_host)
       .http2_keep_alive_interval(KEEP_ALIVE_INTERVAL)
       .http2_keep_alive_timeout(KEEP_ALIVE_TIMEOUT)
       .http2_keep_alive_while_idle(true)
@@ -414,6 +531,55 @@ fn shape_headers(headers: &mut HeaderMap, purpose: Purpose, extra: &HeaderMap) {
 
 const fn is_idempotent(method: &Method) -> bool {
    matches!(*method, Method::GET | Method::HEAD)
+}
+
+/// HTML (or headerless) 429 from X's edge. A JSON 429 carries
+/// `x-rate-limit-remaining` or `application/json` and is the account quota,
+/// which a different IP does not reset.
+fn is_edge_block(status: StatusCode, headers: &HeaderMap) -> bool {
+   if status != StatusCode::TOO_MANY_REQUESTS {
+      return false;
+   }
+   if headers.get("x-rate-limit-remaining").is_some() {
+      return false;
+   }
+   headers
+      .get(header::CONTENT_TYPE)
+      .and_then(|value| value.to_str().ok())
+      .is_none_or(|value| !value.to_ascii_lowercase().contains("json"))
+}
+
+fn is_direct_failure(err: &Error) -> bool {
+   let Error::Internal(message) = err else {
+      return false;
+   };
+   let message = message.to_ascii_lowercase();
+   message.contains("timed out")
+      || message.contains("connect failed")
+      || message.contains("error sending request")
+      || message.contains("connection")
+      || message.contains("broken pipe")
+}
+
+fn proxy_tag(proxy: Option<&ProxyConfig>) -> u64 {
+   let Some(proxy) = proxy else {
+      return 0;
+   };
+   let mut tag = 0xcbf2_9ce4_8422_2325_u64;
+   tag ^= u64::from(proxy.port);
+   tag = tag.wrapping_mul(0x100_0000_01b3);
+   for byte in proxy.host.bytes() {
+      tag ^= u64::from(byte);
+      tag = tag.wrapping_mul(0x100_0000_01b3);
+   }
+   tag | 1
+}
+
+fn unix_millis() -> u64 {
+   SystemTime::now()
+      .duration_since(UNIX_EPOCH)
+      .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
+      .unwrap_or(0)
 }
 
 /// A failure to send at all, as opposed to a timeout, a connect failure or a
@@ -562,6 +728,25 @@ mod tests {
          password: Some("p@ss:word".into()),
       };
       assert_eq!(proxy.url(), "socks5h://user:p%40ss%3Aword@proxy.example:10001");
+   }
+
+   #[test]
+   fn html_429_is_an_edge_block_and_json_429_is_not() {
+      let mut html = HeaderMap::new();
+      html.insert(
+         header::CONTENT_TYPE,
+         HeaderValue::from_static("text/html; charset=utf-8"),
+      );
+      assert!(is_edge_block(StatusCode::TOO_MANY_REQUESTS, &html));
+
+      let mut quota = HeaderMap::new();
+      quota.insert(
+         header::CONTENT_TYPE,
+         HeaderValue::from_static("application/json"),
+      );
+      quota.insert("x-rate-limit-remaining", HeaderValue::from_static("0"));
+      assert!(!is_edge_block(StatusCode::TOO_MANY_REQUESTS, &quota));
+      assert!(!is_edge_block(StatusCode::OK, &html));
    }
 
    #[test]

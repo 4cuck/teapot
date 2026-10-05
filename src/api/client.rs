@@ -296,15 +296,12 @@ impl ApiClient {
    /// Identity headers (user agent, client hints, languages, encodings) come
    /// from each session's browser profile, so none are set here.
    pub fn new(config: &Config, sessions: SessionPool, proxies: Option<ProxyPool>) -> Self {
-      let api_proxy = if config.config.api_proxy.is_empty() {
-         &config.config.proxy
-      } else {
-         &config.config.api_proxy
-      };
-      let mut client = HttpClient::new(api_proxy, &config.config.proxy_auth, Purpose::Api);
-      if api_proxy.is_empty()
-         && let Some(ref pool) = proxies
-      {
+      // Direct first, on the server's own address. apiProxy is only the
+      // residential exit used after an HTML 429.
+      let mut client = HttpClient::new("", "", Purpose::Api);
+      if !config.config.api_proxy.is_empty() {
+         client = client.with_fallback_proxy(&config.config.api_proxy, &config.config.proxy_auth);
+      } else if let Some(ref pool) = proxies {
          client = client.with_default_proxy(pool.first());
       }
 
