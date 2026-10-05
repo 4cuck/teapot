@@ -18,6 +18,7 @@ use crate::{
       TweetStats,
       User,
       Video,
+      VIDEO_CACHE_LIMIT_MESSAGE,
    },
    utils::{
       entity_expander::expand_with_regex,
@@ -913,6 +914,15 @@ fn render_video(video: &Video, config: &Config, prefs: Option<&Prefs>, big_thumb
                        img src=(thumb) loading="lazy";
                        div class="video-overlay" {
                            (button_referer("/enablemp4", "Enable mp4 playback", "", "", ""))
+                       }
+                   } @else if video.exceeds_cloudflare_cache() {
+                       img src=(thumb) loading="lazy";
+                       div class="video-overlay cache-limit" {
+                           p {
+                               (VIDEO_CACHE_LIMIT_MESSAGE)
+                               " "
+                               a href="/about" { "Donate" }
+                           }
                        }
                    } @else if let Some(mp4_url) = video.best_mp4_url() {
                        // Render MP4 playback with a native video element and controls

@@ -26,6 +26,10 @@ use crate::{
       Error,
       Result,
    },
+   types::{
+      CLOUDFLARE_VIDEO_CACHE_BYTES,
+      VIDEO_CACHE_LIMIT_MESSAGE,
+   },
    utils::{
       formatters,
       hmac,
@@ -33,7 +37,7 @@ use crate::{
 };
 
 const MAX_IMAGE_BYTES: usize = 25 * 1024 * 1024;
-const MAX_VIDEO_BYTES: usize = 1024 * 1024 * 1024;
+const MAX_VIDEO_BYTES: usize = CLOUDFLARE_VIDEO_CACHE_BYTES as usize;
 const MAX_GIF_BYTES: u64 = 100 * 1024 * 1024;
 
 #[derive(Clone, Copy)]
@@ -273,7 +277,9 @@ async fn proxy_video(state: &AppState, url: &str, req_headers: &HeaderMap) -> Re
    }
 
    let resp_headers = response.headers();
-   ensure_content_length_under(resp_headers, MAX_VIDEO_BYTES as u64)?;
+   if upstream_object_length(resp_headers).is_some_and(|length| length > MAX_VIDEO_BYTES as u64) {
+      return Err(Error::InvalidUrl(VIDEO_CACHE_LIMIT_MESSAGE.to_owned()));
+   }
 
    let content_type = resp_headers
       .get(header::CONTENT_TYPE)
@@ -338,6 +344,23 @@ fn is_pscp_image_host(host: &str) -> bool {
    host == "video.pscp.tv" || host.ends_with(".video.pscp.tv")
 }
 
+/// Full object size: the total from `Content-Range`, otherwise `Content-Length`.
+fn upstream_object_length(headers: &HeaderMap) -> Option<u64> {
+   headers
+      .get(header::CONTENT_RANGE)
+      .and_then(|value| value.to_str().ok())
+      .and_then(|raw| raw.rsplit_once('/'))
+      .map(|(_, total)| total.trim())
+      .filter(|total| *total != "*")
+      .and_then(|total| total.parse().ok())
+      .or_else(|| {
+         headers
+            .get(header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse().ok())
+      })
+}
+
 fn ensure_content_length_under(headers: &HeaderMap, max_bytes: u64) -> Result<()> {
    let Some(value) = headers.get(header::CONTENT_LENGTH) else {
       return Ok(());
@@ -376,5 +399,20 @@ mod tests {
       assert!(
          validate_media_url("https://video.twimg.com/path/video.mp4", MediaKind::Image).is_err()
       );
+   }
+
+   #[test]
+   fn object_length_prefers_content_range_total() {
+      let mut headers = HeaderMap::new();
+      headers.insert(
+         header::CONTENT_RANGE,
+         header::HeaderValue::from_static("bytes 0-1/1657096439"),
+      );
+      headers.insert(
+         header::CONTENT_LENGTH,
+         header::HeaderValue::from_static("2"),
+      );
+      assert_eq!(upstream_object_length(&headers), Some(1_657_096_439));
+      assert!(upstream_object_length(&headers).unwrap() > MAX_VIDEO_BYTES as u64);
    }
 }

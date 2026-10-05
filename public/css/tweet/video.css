@@ -88,3 +88,26 @@ video {
     font-size: 16px;
   }
 }
+
+.video-overlay.cache-limit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+
+  & p {
+    position: static;
+    top: auto;
+    font-size: 15px;
+    line-height: 1.4;
+    margin: 0;
+    max-width: 34em;
+  }
+
+  & a {
+    color: inherit;
+    font-weight: 700;
+    text-decoration: underline;
+    pointer-events: all;
+  }
+}

@@ -37,6 +37,12 @@ pub enum VideoType {
    Mp4,
 }
 
+/// Cloudflare will not cache a video larger than this, so playback stops here.
+pub const CLOUDFLARE_VIDEO_CACHE_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Shown when a video is too large for the Cloudflare cache.
+pub const VIDEO_CACHE_LIMIT_MESSAGE: &str = "This video is larger than Cloudflare's 512 MB cache, so it can't be played through. More donations are needed to cover a larger cache.";
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct VideoVariant {
@@ -61,6 +67,27 @@ pub struct Video {
 }
 
 impl Video {
+   /// Whether the highest-resolution MP4 is larger than Cloudflare will cache.
+   ///
+   /// Size is estimated from that variant's bitrate and duration. A missing
+   /// bitrate does not count as over the limit.
+   #[must_use]
+   pub fn exceeds_cloudflare_cache(&self) -> bool {
+      let Some(variant) = self
+         .variants
+         .iter()
+         .filter(|variant| matches!(variant.content_type, VideoType::Mp4))
+         .max_by_key(|variant| variant.resolution)
+      else {
+         return false;
+      };
+      if variant.bitrate <= 0 || self.duration_ms <= 0 {
+         return false;
+      }
+      let bits = i64::from(variant.bitrate).saturating_mul(i64::from(self.duration_ms)) / 1000;
+      u64::try_from(bits / 8).unwrap_or(u64::MAX) > CLOUDFLARE_VIDEO_CACHE_BYTES
+   }
+
    /// Get the best MP4 URL for embedding.
    pub fn best_mp4_url(&self) -> Option<&str> {
       self
@@ -365,5 +392,30 @@ impl Tweet {
          Some(inner) if inner.id != 0 => inner.id,
          _ => self.id,
       }
+   }
+}
+
+#[cfg(test)]
+mod tests {
+   use super::*;
+
+   fn video(bitrate: i32, duration_ms: i32) -> Video {
+      Video {
+         duration_ms,
+         variants: vec![VideoVariant {
+            content_type: VideoType::Mp4,
+            bitrate,
+            resolution: 1080,
+            url: "https://video.twimg.com/video.mp4".to_owned(),
+         }],
+         ..Video::default()
+      }
+   }
+
+   #[test]
+   fn cache_limit_uses_bitrate_and_duration() {
+      assert!(!video(2_000_000, 10_000).exceeds_cloudflare_cache());
+      assert!(video(8_000_000, 600_000).exceeds_cloudflare_cache());
+      assert!(!video(0, 3_600_000).exceeds_cloudflare_cache());
    }
 }
