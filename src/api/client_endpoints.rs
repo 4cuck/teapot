@@ -405,7 +405,18 @@ impl ApiClient {
    }
 
    /// Get user's tweets timeline.
+   ///
+   /// When every account is out of `UserTweets`, the replies endpoint still
+   /// has its own budget. Reply-only posts are removed and its cursor is
+   /// dropped so "load more" does not send a replies cursor to `UserTweets`.
    pub async fn get_user_tweets(&self, user_id: &str, cursor: Option<&str>) -> Result<Timeline> {
+      match self.fetch_user_tweets(user_id, cursor).await {
+         Err(Error::RateLimited) if cursor.is_none() => self.posts_from_replies(user_id).await,
+         other => other,
+      }
+   }
+
+   async fn fetch_user_tweets(&self, user_id: &str, cursor: Option<&str>) -> Result<Timeline> {
       let data = self
          .graphql_request::<UserTimelineData>(
             endpoints::GRAPH_USER_TWEETS,
@@ -415,6 +426,14 @@ impl ApiClient {
          )
          .await?;
       parser::parse_timeline(&data)
+   }
+
+   async fn posts_from_replies(&self, user_id: &str) -> Result<Timeline> {
+      let mut timeline = self.get_user_tweets_and_replies(user_id, None).await?;
+      timeline.keep_posts();
+      timeline.top = None;
+      timeline.bottom = None;
+      Ok(timeline)
    }
 
    /// Get user's media timeline.

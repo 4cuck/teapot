@@ -31,6 +31,7 @@ use crate::{
    cache::{
       keys as cache_keys,
       ttl,
+      Hit,
    },
    error::{
       Error,
@@ -51,26 +52,54 @@ use crate::{
    },
 };
 
+/// Below this many accounts with `UserTweets` left, a stale profile is shown
+/// as-is. The background refresh would spend the quota the visitor needs.
+const TIMELINE_REFRESH_FLOOR: usize = 8;
+
 async fn load_first_profile(state: &AppState, username: &str) -> Result<Profile> {
    let cache_key = cache_keys::profile(username);
-   if let Some(cached) = helpers::swr_take(state, &cache_key, {
-      let username = username.to_owned();
-      move |state| async move {
-         let hint = helpers::user_hint(&state, &username);
-         let rail = helpers::cached_photo_rail(&state, &username);
-         if let Ok(profile) = state
-            .api
-            .get_profile_hinted(&username, None, hint.as_ref(), rail)
-            .await
+   match state.cache.lookup::<Profile>(&cache_key) {
+      Some(Hit::Fresh(profile)) => {
+         tracing::debug!("Cache hit for profile: {username}");
+         return Ok(profile);
+      },
+      Some(Hit::Stale(profile)) => {
+         if state.api.user_timeline_accounts().await >= TIMELINE_REFRESH_FLOOR
+            && let Some(guard) = state.cache.start_refresh(&cache_key)
          {
-            helpers::store_profile(&state, &profile);
+            let state = state.clone();
+            let username = username.to_owned();
+            tokio::spawn(async move {
+               let _guard = guard;
+               refresh_profile(&state, &username).await;
+            });
          }
-      }
-   }) {
-      tracing::debug!("Cache hit for profile: {username}");
-      return Ok(cached);
+         tracing::debug!("Stale profile for {username}");
+         return Ok(profile);
+      },
+      None => {},
    }
 
+   match fetch_profile(state, username).await {
+      Ok(profile) => Ok(profile),
+      Err(err) if err.is_upstream_limit() => state.cache.recall(&cache_key).ok_or(err),
+      Err(err) => Err(err),
+   }
+}
+
+async fn refresh_profile(state: &AppState, username: &str) {
+   let hint = helpers::user_hint(state, username);
+   let rail = helpers::cached_photo_rail(state, username);
+   if let Ok(profile) = state
+      .api
+      .get_profile_hinted(username, None, hint.as_ref(), rail)
+      .await
+   {
+      helpers::store_profile(state, &profile);
+   }
+}
+
+async fn fetch_profile(state: &AppState, username: &str) -> Result<Profile> {
    let hint = helpers::user_hint(state, username);
    let rail = helpers::cached_photo_rail(state, username);
    let (profile_res, about) = tokio::join!(
@@ -85,6 +114,34 @@ async fn load_first_profile(state: &AppState, username: &str) -> Result<Profile>
    }
    helpers::store_profile(state, &profile);
    Ok(profile)
+}
+
+/// A cursor page is reused for a few minutes, and the last copy is served
+/// when `UserTweets` is exhausted.
+async fn load_profile_cursor(state: &AppState, username: &str, cursor: &str) -> Result<Profile> {
+   let cache_key = cache_keys::profile_cursor(username, cursor);
+   if let Some(Hit::Fresh(profile) | Hit::Stale(profile)) = state.cache.lookup(&cache_key) {
+      return Ok(profile);
+   }
+
+   let hint = helpers::user_hint(state, username);
+   match state
+      .api
+      .get_profile_hinted(username, Some(cursor), hint.as_ref(), None)
+      .await
+   {
+      Ok(profile) => {
+         state.cache.set_swr(
+            &cache_key,
+            &profile,
+            ttl::PROFILE_CURSOR,
+            ttl::PROFILE_CURSOR_STALE,
+         );
+         Ok(profile)
+      },
+      Err(err) if err.is_upstream_limit() => state.cache.recall(&cache_key).ok_or(err),
+      Err(err) => Err(err),
+   }
 }
 
 /// Reserved path names that cannot be usernames.
@@ -198,14 +255,10 @@ async fn user_timeline(
    // Extract prefs from cookies
    let prefs = Prefs::from_cookies(&jar, &state.config);
 
-   let profile_result = if query.cursor.is_none() {
-      load_first_profile(&state, &username).await
+   let profile_result = if let Some(cursor) = query.cursor.as_deref() {
+      load_profile_cursor(&state, &username, cursor).await
    } else {
-      let hint = helpers::user_hint(&state, &username);
-      state
-         .api
-         .get_profile_hinted(&username, query.cursor.as_deref(), hint.as_ref(), None)
-         .await
+      load_first_profile(&state, &username).await
    };
 
    match profile_result {

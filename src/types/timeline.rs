@@ -57,6 +57,15 @@ pub struct Conversation {
 pub type Timeline = PaginatedResult<Tweets>;
 
 impl Timeline {
+   /// Drop groups whose first post is a reply to someone else.
+   ///
+   /// Used when the profile timeline is served from `UserTweetsAndReplies`,
+   /// which mixes those replies into the posts tab.
+   pub fn keep_posts(&mut self) {
+      self.content
+         .retain(|group| group.first().is_none_or(|tweet| !tweet.replies_to_someone_else()));
+   }
+
    /// One thumbnail per post of a media timeline: first photo, else the video,
    /// GIF or card image.
    #[must_use]
@@ -104,6 +113,39 @@ pub struct Profile {
 pub struct EditHistory {
    pub latest:  Tweet,
    pub history: Tweets,
+}
+
+#[cfg(test)]
+mod tests {
+   use super::*;
+
+   fn tweet(author: &str, reply_to: &str) -> Tweet {
+      Tweet {
+         user: User {
+            username: author.to_owned(),
+            ..User::default()
+         },
+         reply: (!reply_to.is_empty()).then(|| vec![reply_to.to_owned()]).unwrap_or_default(),
+         text: "x".to_owned(),
+         ..Tweet::default()
+      }
+   }
+
+   #[test]
+   fn keep_posts_drops_replies_to_other_people() {
+      let mut timeline = Timeline {
+         content: vec![
+            vec![tweet("alice", "")],
+            vec![tweet("alice", "alice")],
+            vec![tweet("alice", "bob")],
+         ],
+         ..Timeline::default()
+      };
+      timeline.keep_posts();
+      assert_eq!(timeline.content.len(), 2);
+      assert!(timeline.content[0][0].reply.is_empty());
+      assert_eq!(timeline.content[1][0].reply[0], "alice");
+   }
 }
 
 /// Twitter list.

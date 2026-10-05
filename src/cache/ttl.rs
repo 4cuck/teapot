@@ -4,6 +4,13 @@ pub const DEFAULT: u64 = 5 * 60; // 5 minutes
 /// Serve a stale profile this long after [`DEFAULT`] while a refresh runs.
 pub const DEFAULT_STALE: u64 = 20 * 60;
 
+/// A profile "load more" page. Repeats of the same cursor must not spend
+/// another `UserTweets` call.
+pub const PROFILE_CURSOR: u64 = 3 * 60;
+
+/// Keep that page servable after [`PROFILE_CURSOR`] without refetching.
+pub const PROFILE_CURSOR_STALE: u64 = 15 * 60;
+
 /// First-page search. Short so results stay fresh but repeats skip X.
 pub const SEARCH: u64 = 60;
 

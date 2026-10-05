@@ -19,12 +19,18 @@ use super::helpers::{
 };
 use crate::{
    AppState,
-   cache::keys as cache_keys,
+   cache::{
+      keys as cache_keys,
+      Hit,
+   },
    error::{
       Error,
       Result,
    },
-   types::Tweet,
+   types::{
+      Profile,
+      Tweet,
+   },
    views::rss as rss_view,
 };
 
@@ -43,6 +49,18 @@ pub fn router() -> Router<AppState> {
       .route("/{username}/lists/{slug}/rss", get(list_by_slug_rss))
       .route("/search/rss", get(search_rss))
       .route("/i/lists/{id}/rss", get(list_rss))
+}
+
+/// Profile timeline already in cache, fresh, stale, or past the stale window.
+fn cached_profile_page(state: &AppState, username: &str, cursor: Option<&str>) -> Option<Profile> {
+   let key = match cursor {
+      Some(cursor) => cache_keys::profile_cursor(username, cursor),
+      None => cache_keys::profile(username),
+   };
+   match state.cache.lookup(&key) {
+      Some(Hit::Fresh(profile) | Hit::Stale(profile)) => Some(profile),
+      None => state.cache.recall(&key),
+   }
 }
 
 /// Return a 404 error when RSS is disabled.
@@ -83,6 +101,19 @@ async fn user_rss_handler(
    } else {
       None
    };
+
+   // The profile page already paid for these posts. Rebuild the feed from
+   // that copy instead of spending another UserTweets call.
+   if matches!(kind, UserRssKind::Tweets)
+      && let Some(profile) = cached_profile_page(state, username, cursor.as_deref())
+   {
+      let tweets = profile.tweets.content.into_iter().flatten().collect::<Vec<_>>();
+      let rss = rss_view::render_user_rss(&profile.user, &tweets, &state.config, feed_kind);
+      if let Some(ref key) = rss_cache_key {
+         cache_rss(state, key, &rss, tweets.iter().map(|tweet| tweet.id).min());
+      }
+      return Ok(rss_response(rss, &tweets));
+   }
 
    let user = get_cached_user(state, username).await?;
 

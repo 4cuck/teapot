@@ -159,6 +159,12 @@ pub enum Error {
 }
 
 impl Error {
+   /// Account quota or the edge block. Either one can be covered by a cached page.
+   #[must_use]
+   pub const fn is_upstream_limit(&self) -> bool {
+      matches!(self, Self::RateLimited | Self::IpThrottled)
+   }
+
    /// Status, heading and reader-facing text for this failure.
    #[must_use]
    pub fn presentation(&self) -> (StatusCode, &'static str, &str) {

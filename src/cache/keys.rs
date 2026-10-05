@@ -6,6 +6,11 @@ pub fn profile(username: &str) -> String {
    format!("p:{}", username.to_lowercase())
 }
 
+/// One cursor page of a profile timeline.
+pub fn profile_cursor(username: &str, cursor: &str) -> String {
+   format!("pc:{}:{cursor}", username.to_lowercase())
+}
+
 pub fn account_context(username: &str) -> String {
    format!("ac:{}", username.to_lowercase())
 }

@@ -57,6 +57,17 @@ pub struct SessionLimits {
 /// min).
 const GLOBAL_LIMIT_DURATION_SECS: i64 = 15 * 60;
 
+/// Result of taking one call from a session's local window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Spend {
+   /// Remaining was decremented.
+   Metered,
+   /// No active window, so the call proceeds without a local hold.
+   Unmetered,
+   /// The account cannot make this call.
+   Denied,
+}
+
 impl SessionLimits {
    /// Check if rate limited for a specific API.
    pub fn is_limited(&self, api: &str) -> bool {
@@ -70,6 +81,43 @@ impl SessionLimits {
          }
       }
       false
+   }
+
+   /// Spend one local call against `api` when its window is known.
+   ///
+   /// The decrement happens before the request is handed out, so the next
+   /// acquire sees the account as exhausted instead of piling onto it.
+   pub(crate) fn try_spend(&mut self, api: &str) -> Spend {
+      if self.rejected || self.is_globally_limited() {
+         return Spend::Denied;
+      }
+      let now = time::OffsetDateTime::now_utc().unix_timestamp();
+      let Some(rate) = self.apis.get_mut(api) else {
+         return Spend::Unmetered;
+      };
+      if rate.reset <= now {
+         return Spend::Unmetered;
+      }
+      if rate.remaining <= 0 {
+         return Spend::Denied;
+      }
+      rate.remaining -= 1;
+      Spend::Metered
+   }
+
+   /// Give back a local spend when the call never reached X's quota.
+   pub(crate) fn refund_spend(&mut self, api: &str) {
+      let now = time::OffsetDateTime::now_utc().unix_timestamp();
+      let Some(rate) = self.apis.get_mut(api) else {
+         return;
+      };
+      if rate.reset <= now {
+         return;
+      }
+      if rate.limit > 0 && rate.remaining >= rate.limit {
+         return;
+      }
+      rate.remaining += 1;
    }
 
    /// Whether the session-wide limit is set and has not yet expired.

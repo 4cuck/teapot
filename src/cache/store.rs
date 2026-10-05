@@ -97,6 +97,18 @@ impl Cache {
       }
    }
 
+   /// Last stored value, including one past its stale window.
+   ///
+   /// Eviction still drops it once the cache is over capacity. Until then a
+   /// rate-limited profile can be shown instead of the error page.
+   pub fn recall<T>(&self, key: &str) -> Option<T>
+   where
+      T: Any + Send + Sync + Clone,
+   {
+      let map = self.inner.read().ok()?;
+      map.get(key)?.value.downcast_ref::<T>().cloned()
+   }
+
    /// Set a value in cache with TTL in seconds.
    pub fn set<T>(&self, cache_key: &str, value: &T, ttl_seconds: u64)
    where
@@ -183,5 +195,18 @@ impl Cache {
          .filter(|key| key.starts_with(prefix))
          .cloned()
          .collect()
+   }
+}
+
+#[cfg(test)]
+mod tests {
+   use super::*;
+
+   #[test]
+   fn recall_returns_a_value_past_its_stale_window() {
+      let cache = Cache::new(8);
+      cache.set("profile", &7_u32, 0);
+      assert!(cache.lookup::<u32>("profile").is_none());
+      assert_eq!(cache.recall::<u32>("profile"), Some(7));
    }
 }

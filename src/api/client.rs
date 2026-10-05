@@ -548,6 +548,13 @@ impl ApiClient {
       }
    }
 
+   /// Sessions that can still open a profile timeline (`UserTweets`).
+   pub async fn user_timeline_accounts(&self) -> usize {
+      self.sessions
+         .available_for(endpoints::GRAPH_USER_TWEETS)
+         .await
+   }
+
    /// SearchTimeline is billed higher because first-page cache still misses on
    /// a new query and each page spends the tight 50/15m search budget.
    fn cost_of(endpoint: &str) -> f64 {
@@ -656,10 +663,17 @@ impl ApiClient {
          )
          .await?;
 
-      let response = self
+      let response = match self
          .client
          .get_on(&url, &headers, Some(&self.egress_for(session)))
-         .await?;
+         .await
+      {
+         Ok(response) => response,
+         Err(err) => {
+            self.sessions.refund_if_metered(session, endpoint).await;
+            return Err(err);
+         },
+      };
       let (bytes, limit_recorded) = self.account_response(session, endpoint, response).await?;
 
       // One pass over a body that can run to several megabytes: the envelope
@@ -720,6 +734,7 @@ impl ApiClient {
             .and_then(|sv| sv.parse().ok())
             .unwrap_or(0);
 
+         self.sessions.disarm_meter(session);
          self
             .sessions
             .update_session_limit(session.id, endpoint, limit, remaining_val, reset)
@@ -742,8 +757,11 @@ impl ApiClient {
             let body_trim = body.trim_start();
             let ip_throttle = body_trim.is_empty() || body_trim.starts_with('<');
             if ip_throttle {
+               // The edge block is the IP, not this account's window.
+               self.sessions.refund_if_metered(session, endpoint).await;
                return Err(Error::IpThrottled);
             }
+            self.sessions.disarm_meter(session);
             if !limit_recorded {
                self
                   .sessions
@@ -764,6 +782,7 @@ impl ApiClient {
                session_user = %session.username,
                "API request failed: {status} - {body}"
             );
+            self.sessions.disarm_meter(session);
             self.sessions.mark_rejected(session.id).await;
             return Err(Error::SessionRejected(format!("Status {status}: {body}")));
          }
@@ -778,6 +797,7 @@ impl ApiClient {
                   endpoint,
                   "bodyless 404, retrying without a transaction id"
                );
+               self.sessions.refund_if_metered(session, endpoint).await;
                return Err(Error::TransientUpstream);
             }
             tracing::warn!(
@@ -785,6 +805,7 @@ impl ApiClient {
                session_user = %session.username,
                "API 404: {body}"
             );
+            self.sessions.disarm_meter(session);
             if let Err(err) = Self::check_api_errors(body.as_bytes()) {
                return Err(err);
             }
@@ -805,9 +826,11 @@ impl ApiClient {
             );
          }
 
+         self.sessions.refund_if_metered(session, endpoint).await;
          return Err(Error::TwitterApi(format!("Status {status}: {body}")));
       }
 
+      self.sessions.disarm_meter(session);
       Ok((response.bytes().await?, limit_recorded))
    }
 

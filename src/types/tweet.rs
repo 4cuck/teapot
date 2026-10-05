@@ -396,6 +396,13 @@ impl Tweet {
          || !self.gifs.is_empty()
    }
 
+   /// A reply to someone other than the author. A self-thread stays.
+   pub fn replies_to_someone_else(&self) -> bool {
+      self.reply
+         .iter()
+         .any(|name| !name.eq_ignore_ascii_case(&self.user.username))
+   }
+
    /// Status id of the original post. Retweet wrappers have their own id.
    pub fn original_id(&self) -> i64 {
       match self.retweet.as_ref() {

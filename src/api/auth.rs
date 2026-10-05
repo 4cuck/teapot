@@ -10,6 +10,7 @@ use std::{
    sync::{
       Arc,
       atomic::{
+         AtomicBool,
          AtomicUsize,
          Ordering,
       },
@@ -48,6 +49,7 @@ use crate::{
       SessionCredentials,
       SessionKind,
       SessionLimits,
+      Spend,
    },
 };
 
@@ -120,6 +122,8 @@ struct SessionSlot {
 pub struct SessionLease {
    credentials: Arc<SessionCredentials>,
    _permit:     OwnedSemaphorePermit,
+   /// This lease decremented the endpoint's local remaining count.
+   metered:     AtomicBool,
 }
 
 impl Deref for SessionLease {
@@ -341,62 +345,121 @@ impl SessionPool {
          return Err(Error::NoSessions);
       }
 
-      let limits = self.limits.read().await;
-      let start = self.cursor.fetch_add(1, Ordering::Relaxed);
-      let eligible = (0..self.sessions.len())
-         .map(|offset| &self.sessions[(start.wrapping_add(offset)) % self.sessions.len()])
-         .filter(|slot| {
-            excluded_id != Some(slot.credentials.id)
-               && required_kind.is_none_or(|kind| slot.credentials.kind == kind)
-               && !limits
-                  .get(&slot.credentials.id)
-                  .is_some_and(|session_limits| session_limits.rejected)
-         })
-         .collect::<Vec<_>>();
+      loop {
+         let start = self.cursor.fetch_add(1, Ordering::Relaxed);
+         let mut limits = self.limits.write().await;
+         let eligible = (0..self.sessions.len())
+            .map(|offset| (start.wrapping_add(offset)) % self.sessions.len())
+            .filter(|&index| {
+               let slot = &self.sessions[index];
+               excluded_id != Some(slot.credentials.id)
+                  && required_kind.is_none_or(|kind| slot.credentials.kind == kind)
+                  && !limits
+                     .get(&slot.credentials.id)
+                     .is_some_and(|session_limits| session_limits.rejected)
+            })
+            .collect::<Vec<_>>();
 
-      if eligible.is_empty() {
-         return Err(Error::NoSessions);
-      }
-
-      // Prefer a non-limited session with a permit immediately available.
-      for slot in &eligible {
-         let limited = limits
-            .get(&slot.credentials.id)
-            .is_some_and(|session_limits| {
-               session_limits.is_limited(api_for(slot.credentials.kind))
-            });
-         if !limited && let Ok(permit) = Arc::clone(&slot.permits).try_acquire_owned() {
-            return Ok(SessionLease {
-               credentials: Arc::clone(&slot.credentials),
-               _permit:     permit,
-            });
+         if eligible.is_empty() {
+            return Err(Error::NoSessions);
          }
+
+         // Spend the local window under the write lock, then take a permit.
+         // A session that is only busy is remembered so we can wait on it.
+         let mut wait_on = None;
+         for index in eligible {
+            let api = api_for(self.sessions[index].credentials.kind);
+            let spent = match limits.get_mut(&self.sessions[index].credentials.id) {
+               Some(session_limits) => session_limits.try_spend(api),
+               None => Spend::Unmetered,
+            };
+            if spent == Spend::Denied {
+               continue;
+            }
+            let metered = spent == Spend::Metered;
+            if let Ok(permit) = Arc::clone(&self.sessions[index].permits).try_acquire_owned() {
+               let credentials = Arc::clone(&self.sessions[index].credentials);
+               return Ok(Self::lease(credentials, permit, metered));
+            }
+            if metered && let Some(session_limits) = limits.get_mut(&self.sessions[index].credentials.id) {
+               session_limits.refund_spend(api);
+            }
+            wait_on.get_or_insert(index);
+         }
+
+         let Some(index) = wait_on else {
+            return Err(Error::RateLimited);
+         };
+         let api = api_for(self.sessions[index].credentials.kind).to_owned();
+         let credentials = Arc::clone(&self.sessions[index].credentials);
+         let permits = Arc::clone(&self.sessions[index].permits);
+         drop(limits);
+
+         let permit = permits
+            .acquire_owned()
+            .await
+            .map_err(|_| Error::Internal("session request limiter closed".into()))?;
+
+         // The account may have been exhausted while this permit was queued.
+         let mut limits = self.limits.write().await;
+         if limits
+            .get(&credentials.id)
+            .is_some_and(|session_limits| session_limits.rejected)
+         {
+            drop(permit);
+            continue;
+         }
+         let spent = match limits.get_mut(&credentials.id) {
+            Some(session_limits) => session_limits.try_spend(&api),
+            None => Spend::Unmetered,
+         };
+         if spent == Spend::Denied {
+            drop(permit);
+            continue;
+         }
+         return Ok(Self::lease(credentials, permit, spent == Spend::Metered));
       }
+   }
 
-      // Every usable session is busy, so queue on the next non-limited one.
-      let chosen = eligible
-         .iter()
-         .find(|slot| {
-            !limits
-               .get(&slot.credentials.id)
-               .is_some_and(|session_limits| {
-                  session_limits.is_limited(api_for(slot.credentials.kind))
-               })
-         })
-         .copied()
-         .ok_or(Error::RateLimited)?;
-      let credentials = Arc::clone(&chosen.credentials);
-      let permits = Arc::clone(&chosen.permits);
-      drop(limits);
-
-      let permit = permits
-         .acquire_owned()
-         .await
-         .map_err(|_| Error::Internal("session request limiter closed".into()))?;
-      Ok(SessionLease {
+   fn lease(
+      credentials: Arc<SessionCredentials>,
+      permit: OwnedSemaphorePermit,
+      metered: bool,
+   ) -> SessionLease {
+      SessionLease {
          credentials,
          _permit: permit,
-      })
+         metered: AtomicBool::new(metered),
+      }
+   }
+
+   /// How many sessions can still call `api`.
+   pub(crate) async fn available_for(&self, api: &str) -> usize {
+      let limits = self.limits.read().await;
+      self.sessions
+         .iter()
+         .filter(|slot| {
+            limits.get(&slot.credentials.id).is_none_or(|session_limits| {
+               !session_limits.rejected && !session_limits.is_limited(api)
+            })
+         })
+         .count()
+   }
+
+   /// Return a local spend when the call failed before X counted it.
+   pub(crate) async fn refund_if_metered(&self, session: &SessionLease, api: &str) {
+      if !session.metered.swap(false, Ordering::Relaxed) {
+         return;
+      }
+      let mut limits = self.limits.write().await;
+      if let Some(session_limits) = limits.get_mut(&session.id) {
+         session_limits.refund_spend(api);
+      }
+   }
+
+   /// The call reached X, so the local spend stands.
+   pub(crate) fn disarm_meter(&self, session: &SessionLease) {
+      session.metered.store(false, Ordering::Relaxed);
    }
 
    /// Update rate limit info for a session.
@@ -419,6 +482,21 @@ impl SessionPool {
          if lim.limited && !lim.is_limited(api) {
             lim.limited = false;
          }
+         // A local spend already lowered `remaining`. A late header must not
+         // raise it back over calls that are still in flight, and a 429 mark
+         // of zero stays zero until its reset.
+         let now = time::OffsetDateTime::now_utc().unix_timestamp();
+         let remaining = if let Some(existing) = lim.apis.get(api) {
+            if existing.reset > now && existing.remaining == 0 {
+               0
+            } else if existing.reset == reset && reset > now {
+               remaining.min(existing.remaining)
+            } else {
+               remaining
+            }
+         } else {
+            remaining
+         };
          lim.update_limit(api, limit, remaining, reset);
       }
       drop(limits);
@@ -534,10 +612,7 @@ impl SessionPool {
          .acquire_owned()
          .await
          .map_err(|_| Error::Internal("session request limiter closed".into()))?;
-      Ok(SessionLease {
-         credentials,
-         _permit: permit,
-      })
+      Ok(Self::lease(credentials, permit, false))
    }
 
    /// Remember that this session already had sensitive-content filters turned
@@ -769,6 +844,7 @@ mod tests {
       normalized_parameter_string,
       percent_encode,
    };
+   use crate::error::Error;
 
    #[test]
    fn oauth_percent_encoding_follows_rfc_5849() {
@@ -836,6 +912,64 @@ mod tests {
          .await
          .unwrap();
       assert_ne!(first_id, second.id);
+
+      fs::remove_file(path).await.unwrap();
+   }
+
+   #[tokio::test]
+   async fn a_spent_window_is_not_handed_out_again() {
+      // Keep the test from flushing into the live session-limits file.
+      // The setter is process-global; this binary is the test run, not teapot.
+      unsafe { env::set_var("TEAPOT_SESSION_STATE_FILE", "") };
+      let path = env::temp_dir().join(format!(
+         "teapot-session-pool-spend-{}.jsonl",
+         process::id()
+      ));
+      fs::write(
+         &path,
+         concat!(
+            r#"{"id":1,"username":"cookie","kind":"cookie","auth_token":"a","ct0":"c"}"#,
+            "\n"
+         ),
+      )
+      .await
+      .unwrap();
+      let pool = SessionPool::load(path.to_str().unwrap(), 1).await.unwrap();
+      let reset = time::OffsetDateTime::now_utc().unix_timestamp() + 3600;
+      pool
+         .update_session_limit(1, "UserTweets", 50, 1, reset)
+         .await;
+
+      let held = pool
+         .acquire("UserTweets", Some(SessionKind::Cookie))
+         .await
+         .unwrap();
+      assert_eq!(held.id, 1);
+      let next = pool.acquire("UserTweets", Some(SessionKind::Cookie)).await;
+      assert!(matches!(next, Err(Error::RateLimited)));
+      drop(held);
+
+      pool
+         .update_session_limit(1, "Other", 50, 5, reset)
+         .await;
+      let held = pool
+         .acquire("Other", Some(SessionKind::Cookie))
+         .await
+         .unwrap();
+      let waiting_pool = pool.clone();
+      let waiting = tokio::spawn(async move {
+         waiting_pool
+            .acquire("Other", Some(SessionKind::Cookie))
+            .await
+      });
+      tokio::time::sleep(Duration::from_millis(30)).await;
+      pool.mark_endpoint_limited(1, "Other").await;
+      drop(held);
+      let woke = timeout(Duration::from_millis(500), waiting)
+         .await
+         .unwrap()
+         .unwrap();
+      assert!(matches!(woke, Err(Error::RateLimited)));
 
       fs::remove_file(path).await.unwrap();
    }
