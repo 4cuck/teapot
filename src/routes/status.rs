@@ -61,6 +61,28 @@ use crate::{
    },
 };
 
+const PREVIEW_AGENTS: [&str; 6] = [
+   "Discordbot/",
+   "Slackbot",
+   "TelegramBot",
+   "WhatsApp",
+   "facebookexternalhit/",
+   "Twitterbot/",
+];
+
+#[derive(Debug, Deserialize)]
+struct StatusParams {
+   username: String,
+   id:       String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PhotoParams {
+   username: String,
+   id:       String,
+   idx:      usize,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct StatusQuery {
    pub cursor: Option<String>,
@@ -89,7 +111,7 @@ pub fn router() -> Router<AppState> {
          )
          .route(
             &format!("/{{username}}/{prefix}/{{id}}/photo/{{idx}}"),
-            get(status_media_redirect),
+            get(status_photo),
          )
          .route(
             &format!("/{{username}}/{prefix}/{{id}}/video"),
@@ -125,16 +147,47 @@ async fn thread_redirect(Path((username, id)): Path<(String, String)>) -> Respon
    Redirect::to(&format!("/{username}/status/{id}")).into_response()
 }
 
-/// Redirect legacy media URLs (photo/video/history) to the main status page.
-async fn status_media_redirect(Path((username, id)): Path<(String, String)>) -> Response {
-   Redirect::to(&format!("/{username}/status/{id}")).into_response()
+/// Redirect legacy media URLs (photo/video) to the main status page.
+/// Named fields so `/video/1` still redirects; the extra index is ignored.
+async fn status_media_redirect(Path(params): Path<StatusParams>) -> Response {
+   Redirect::to(&format!("/{}/status/{}", params.username, params.id)).into_response()
 }
 
-#[expect(
-   clippy::cognitive_complexity,
-   reason = "status handler has many conditional branches for caching, scrolling, pagination, and \
-             translation"
-)]
+/// Link unfurlers get the status page narrowed to the one photo, so the
+/// preview shows that image instead of the whole post's media.
+async fn status_photo(
+   State(state): State<AppState>,
+   jar: CookieJar,
+   headers: HeaderMap,
+   Path(params): Path<PhotoParams>,
+   Query(query): Query<StatusQuery>,
+) -> Result<Response> {
+   let user_agent = headers
+      .get(header::USER_AGENT)
+      .and_then(|value| value.to_str().ok())
+      .unwrap_or_default();
+
+   if !PREVIEW_AGENTS
+      .iter()
+      .any(|agent| user_agent.contains(agent))
+   {
+      return Ok(
+         Redirect::to(&format!("/{}/status/{}", params.username, params.id)).into_response(),
+      );
+   }
+
+   render_status(
+      state,
+      &jar,
+      &headers,
+      params.username,
+      params.id,
+      query,
+      params.idx.checked_sub(1),
+   )
+   .await
+}
+
 async fn status(
    State(state): State<AppState>,
    jar: CookieJar,
@@ -142,9 +195,25 @@ async fn status(
    Path((username, id)): Path<(String, String)>,
    Query(query): Query<StatusQuery>,
 ) -> Result<Response> {
-   // Extract prefs from cookies
-   let prefs = Prefs::from_cookies(&jar, &state.config);
-   let discord_activity = headers
+   render_status(state, &jar, &headers, username, id, query, None).await
+}
+
+#[expect(
+   clippy::cognitive_complexity,
+   reason = "status handler has many conditional branches for caching, scrolling, pagination, and \
+             translation"
+)]
+async fn render_status(
+   state: AppState,
+   jar: &CookieJar,
+   headers: &HeaderMap,
+   username: String,
+   id: String,
+   query: StatusQuery,
+   photo: Option<usize>,
+) -> Result<Response> {
+   let prefs = Prefs::from_cookies(jar, &state.config);
+   let is_discord = headers
       .get(header::USER_AGENT)
       .and_then(|value| value.to_str().ok())
       .is_some_and(|user_agent| user_agent.contains("Discordbot"));
@@ -188,8 +257,12 @@ async fn status(
 
          helpers::enrich_conversation(&state, &mut conversation).await;
 
+         let focused_photo = photo.filter(|&idx| conversation.tweet.keep_only_photo(idx));
+         let activity =
+            is_discord.then(|| embed::ActivityId::new(conversation.tweet.id, focused_photo));
+
          // Auto-translate for embeds (OG tags / ActivityPub show translated text)
-         if !discord_activity && !is_scroll && !has_cursor && conversation.tweet.is_translatable {
+         if !is_discord && !is_scroll && !has_cursor && conversation.tweet.is_translatable {
             let kagi = &state.config.config.kagi_token;
             let token = (!kagi.is_empty()).then_some(kagi.as_str());
             if let Ok(tl) = get_cached_translation(&state, &conversation.tweet, token).await
@@ -240,6 +313,9 @@ async fn status(
                }
             };
             first_page.replies.bottom = None;
+            if let Some(idx) = focused_photo {
+               first_page.tweet.keep_only_photo(idx);
+            }
             return Ok(render_conversation(
                &first_page,
                false,
@@ -248,7 +324,7 @@ async fn status(
                &prefs,
                &state.config,
                query.sort.as_deref(),
-               discord_activity,
+               activity,
             ));
          }
 
@@ -270,6 +346,9 @@ async fn status(
                   conversation.tweet = fresh.tweet;
                }
             }
+            if let Some(idx) = focused_photo {
+               conversation.tweet.keep_only_photo(idx);
+            }
          }
 
          Ok(render_conversation(
@@ -280,7 +359,7 @@ async fn status(
             &prefs,
             &state.config,
             query.sort.as_deref(),
-            discord_activity,
+            activity,
          ))
       },
       Err(Error::TweetNotFound(msg)) => {
@@ -304,7 +383,7 @@ fn render_conversation(
    prefs: &Prefs,
    config: &Config,
    sort: Option<&str>,
-   discord_activity: bool,
+   activity: Option<embed::ActivityId>,
 ) -> Response {
    let tweet = &conversation.tweet;
 
@@ -461,7 +540,7 @@ fn render_conversation(
       config,
       username,
       id,
-      discord_activity,
+      activity,
    );
    Html(markup.into_string()).into_response()
 }
@@ -532,6 +611,8 @@ async fn status_by_id(
          }
 
          let username = conversation.tweet.user.username.clone();
+         let activity =
+            discord_activity.then(|| embed::ActivityId::new(conversation.tweet.id, None));
          Ok(render_conversation(
             &conversation,
             query.cursor.is_some(),
@@ -540,7 +621,7 @@ async fn status_by_id(
             &prefs,
             &state.config,
             query.sort.as_deref(),
-            discord_activity,
+            activity,
          ))
       },
       Err(Error::TweetNotFound(msg)) => {

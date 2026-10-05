@@ -62,6 +62,7 @@ tower-http = {
     "fs",
     "cors",
     "compression-gzip",
+    "normalize-path",
     "set-header",
     "timeout",
   ],

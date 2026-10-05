@@ -1,4 +1,69 @@
+use std::{
+   fmt::{
+      self,
+      Display,
+      Formatter,
+   },
+   str::FromStr,
+};
+
 use super::*;
+
+use crate::error::Error;
+
+/// The status id Discord echoes back from the activity link. A `/photo/N`
+/// link prefixes N to the tweet id zero-padded to 19 digits, a length no real
+/// snowflake reaches, so Discord's follow-up request still names the photo.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ActivityId {
+   tweet: i64,
+   photo: Option<u8>,
+}
+
+impl ActivityId {
+   pub fn new(tweet: i64, photo_idx: Option<usize>) -> Self {
+      let photo = photo_idx
+         .and_then(|idx| u8::try_from(idx + 1).ok())
+         .filter(|number| *number <= 9);
+      Self { tweet, photo }
+   }
+
+   pub const fn tweet(self) -> i64 {
+      self.tweet
+   }
+
+   pub fn photo_idx(self) -> Option<usize> {
+      self.photo.map(|number| usize::from(number) - 1)
+   }
+}
+
+impl Display for ActivityId {
+   fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+      match self.photo {
+         Some(number) => write!(f, "{number}{:019}", self.tweet),
+         None => write!(f, "{}", self.tweet),
+      }
+   }
+}
+
+impl FromStr for ActivityId {
+   type Err = Error;
+
+   fn from_str(raw: &str) -> Result<Self, Self::Err> {
+      let invalid = || Error::InvalidUrl("Invalid id".into());
+      if !raw.bytes().all(|byte| byte.is_ascii_digit()) {
+         return Err(invalid());
+      }
+
+      let (photo, digits) = match (raw.len(), raw.split_at_checked(1)) {
+         (1..=19, _) => (None, raw),
+         (20, Some((number, rest))) if number != "0" => (number.parse::<u8>().ok(), rest),
+         _ => return Err(invalid()),
+      };
+      let tweet = digits.parse::<i64>().map_err(|_| invalid())?;
+      Ok(Self { tweet, photo })
+   }
+}
 
 /// Mastodon API v1-compatible status for Discord embed support.
 /// Discord uses `created_at` for the footer timestamp and `content`
@@ -868,7 +933,24 @@ pub fn build_activity_pub_with_reply(
 
 #[cfg(test)]
 mod tests {
-   use super::application_name;
+   use super::{
+      ActivityId,
+      application_name,
+   };
+
+   #[test]
+   fn activity_id_keeps_the_photo_across_discord_followup() {
+      let id = ActivityId::new(2_101_716_895_007_203_333, Some(1));
+      let encoded = id.to_string();
+      assert_eq!(encoded, "22101716895007203333");
+      let parsed: ActivityId = encoded.parse().unwrap();
+      assert_eq!(parsed.tweet(), 2_101_716_895_007_203_333);
+      assert_eq!(parsed.photo_idx(), Some(1));
+
+      let plain = ActivityId::new(401, None);
+      assert_eq!(plain.to_string(), "401");
+      assert_eq!("401".parse::<ActivityId>().unwrap(), plain);
+   }
 
    #[test]
    fn application_uses_source_label() {

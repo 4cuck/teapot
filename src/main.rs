@@ -21,6 +21,8 @@ use std::{
 
 use axum::{
    Router,
+   ServiceExt,
+   extract::Request,
    http::{
       StatusCode,
       header::HeaderValue,
@@ -29,8 +31,12 @@ use axum::{
 };
 use axum::http::header;
 use tokio::net::TcpListener;
-use tower::limit::ConcurrencyLimitLayer;
+use tower::{
+   Layer as _,
+   limit::ConcurrencyLimitLayer,
+};
 use tower_http::{
+   normalize_path::NormalizePathLayer,
    services::{
       ServeDir,
       ServeFile,
@@ -240,9 +246,12 @@ async fn main() -> eyre::Result<()> {
    let listener = TcpListener::bind(addr).await?;
 
    tracing::info!("Listening on {addr}");
+   // `/user/` and `/user/status/id/` are the same pages as the slash-free paths.
    axum::serve(
       listener,
-      app.into_make_service_with_connect_info::<SocketAddr>(),
+      ServiceExt::<Request>::into_make_service_with_connect_info::<SocketAddr>(
+         NormalizePathLayer::trim_trailing_slash().layer(app),
+      ),
    )
    .await?;
 

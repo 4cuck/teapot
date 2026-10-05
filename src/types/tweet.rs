@@ -378,6 +378,16 @@ pub struct Translation {
 }
 
 impl Tweet {
+   /// Drop every photo but the one at `idx`, returning whether it existed.
+   pub fn keep_only_photo(&mut self, idx: usize) -> bool {
+      if idx >= self.photos.len() {
+         return false;
+      }
+      self.photos.swap(0, idx);
+      self.photos.truncate(1);
+      true
+   }
+
    /// Check if this tweet has any media.
    pub const fn has_media(&self) -> bool {
       !self.photos.is_empty()
@@ -410,6 +420,27 @@ mod tests {
          }],
          ..Video::default()
       }
+   }
+
+   #[test]
+   fn keep_only_photo_moves_the_chosen_one_first() {
+      let mut tweet = Tweet {
+         photos: vec![
+            Photo {
+               url: "a".to_owned(),
+               ..Photo::default()
+            },
+            Photo {
+               url: "b".to_owned(),
+               ..Photo::default()
+            },
+         ],
+         ..Tweet::default()
+      };
+      assert!(tweet.keep_only_photo(1));
+      assert_eq!(tweet.photos.len(), 1);
+      assert_eq!(tweet.photos[0].url, "b");
+      assert!(!tweet.keep_only_photo(3));
    }
 
    #[test]
