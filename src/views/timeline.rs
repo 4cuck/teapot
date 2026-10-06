@@ -286,6 +286,9 @@ pub fn render_timeline_tabs(active_tab: TimelineKind, username: &str) -> Markup 
            li class=(if active_tab == TimelineKind::Replies { "tab-item active wide" } else { "tab-item wide" }) {
                a href=(format!("/{username}/with_replies")) { "Tweets & Replies" }
            }
+           li class=(if active_tab == TimelineKind::Reposts { "tab-item active" } else { "tab-item" }) {
+               a href=(format!("/{username}/reposts")) { "Reposts" }
+           }
            li class=(if active_tab == TimelineKind::Media { "tab-item active" } else { "tab-item" }) {
                a href=(format!("/{username}/media")) { "Media" }
            }
@@ -319,6 +322,7 @@ pub fn render_media_view_tabs(base: &str, current: &str) -> Markup {
 pub fn tab_to_kind(tab: &str) -> TimelineKind {
    match tab {
       "replies" | "with_replies" => TimelineKind::Replies,
+      "reposts" => TimelineKind::Reposts,
       "media" => TimelineKind::Media,
       "search" => TimelineKind::Search,
       _ => TimelineKind::Tweets,

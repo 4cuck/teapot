@@ -45,6 +45,7 @@ pub fn router() -> Router<AppState> {
    Router::new()
       .route("/{username}/rss", get(user_rss))
       .route("/{username}/with_replies/rss", get(user_replies_rss))
+      .route("/{username}/reposts/rss", get(user_reposts_rss))
       .route("/{username}/media/rss", get(user_media_rss))
       .route("/{username}/search/rss", get(user_search_rss))
       .route("/{username}/status/{id}/rss", get(thread_rss))
@@ -77,6 +78,7 @@ fn check_rss_enabled(state: &AppState) -> Result<()> {
 enum UserRssKind {
    Tweets,
    Replies,
+   Reposts,
    Media,
 }
 
@@ -90,6 +92,7 @@ async fn user_rss_handler(
    let (feed_kind, cache_key_fn): (&str, fn(&str) -> String) = match kind {
       UserRssKind::Tweets => ("tweets", cache_keys::rss_user),
       UserRssKind::Replies => ("replies", cache_keys::rss_replies),
+      UserRssKind::Reposts => ("reposts", cache_keys::rss_reposts),
       UserRssKind::Media => ("media", cache_keys::rss_media),
    };
 
@@ -127,6 +130,7 @@ async fn user_rss_handler(
             .get_user_tweets_and_replies(&user.id, cursor)
             .await?
       },
+      UserRssKind::Reposts => state.api.get_user_reposts(&user.id, cursor).await?,
       UserRssKind::Media => state.api.get_user_media(&user.id, cursor).await?,
    };
    let tweets = timeline.content.into_iter().flatten().collect::<Vec<_>>();
@@ -165,6 +169,21 @@ async fn user_replies_rss(
       &username,
       query.cursor.as_deref(),
       UserRssKind::Replies,
+   )
+   .await
+}
+
+async fn user_reposts_rss(
+   State(state): State<AppState>,
+   Path(username): Path<String>,
+   Query(query): Query<RssQuery>,
+) -> Result<Response> {
+   check_rss_enabled(&state)?;
+   user_rss_handler(
+      &state,
+      &username,
+      query.cursor.as_deref(),
+      UserRssKind::Reposts,
    )
    .await
 }

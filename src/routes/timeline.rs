@@ -217,6 +217,7 @@ pub fn router() -> Router<AppState> {
       .route("/{username}", get(user_timeline))
       .route("/{username}/", get(user_timeline))
       .route("/{username}/with_replies", get(user_replies))
+      .route("/{username}/reposts", get(user_reposts))
       .route("/{username}/media", get(user_media))
       .route("/{username}/search", get(user_search))
 }
@@ -347,6 +348,7 @@ async fn user_tab_handler(
 
    let (cache_kind, tab_str, title_prefix) = match tab {
       TimelineKind::Replies => ("replies", "with_replies", "Tweets & replies from"),
+      TimelineKind::Reposts => ("reposts", "reposts", "Reposts from"),
       TimelineKind::Media => ("media", "media", "Media from"),
       _ => unreachable!(),
    };
@@ -363,6 +365,7 @@ async fn user_tab_handler(
                   TimelineKind::Replies => {
                      state.api.get_user_tweets_and_replies(&user_id, None).await
                   },
+                  TimelineKind::Reposts => state.api.get_user_reposts(&user_id, None).await,
                   TimelineKind::Media => state.api.get_user_media(&user_id, None).await,
                   _ => return,
                };
@@ -377,6 +380,7 @@ async fn user_tab_handler(
          }
          let result = match tab {
             TimelineKind::Replies => state.api.get_user_tweets_and_replies(&user.id, None).await,
+            TimelineKind::Reposts => state.api.get_user_reposts(&user.id, None).await,
             TimelineKind::Media => state.api.get_user_media(&user.id, None).await,
             _ => unreachable!(),
          };
@@ -394,6 +398,7 @@ async fn user_tab_handler(
                   .get_user_tweets_and_replies(&user.id, cursor)
                   .await
             },
+            TimelineKind::Reposts => state.api.get_user_reposts(&user.id, cursor).await,
             TimelineKind::Media => state.api.get_user_media(&user.id, cursor).await,
             _ => unreachable!(),
          }
@@ -483,6 +488,25 @@ async fn user_replies(
       &username,
       query.cursor.as_deref(),
       TimelineKind::Replies,
+      true,
+      "",
+   )
+   .await
+}
+
+async fn user_reposts(
+   State(state): State<AppState>,
+   jar: CookieJar,
+   Path(username): Path<String>,
+   Query(query): Query<TimelineQuery>,
+) -> Result<Response> {
+   let prefs = Prefs::from_cookies(&jar, &state.config);
+   user_tab_handler(
+      &state,
+      &prefs,
+      &username,
+      query.cursor.as_deref(),
+      TimelineKind::Reposts,
       true,
       "",
    )

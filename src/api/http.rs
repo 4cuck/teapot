@@ -33,6 +33,7 @@ use std::{
 
 use axum::http::{
    HeaderMap,
+   HeaderName,
    HeaderValue,
    Method,
    StatusCode,
@@ -449,6 +450,72 @@ fn default_identity() -> Identity {
    }
 }
 
+/// Header order from a logged-in Chrome 152 session on x.com.
+///
+/// Names that a given request does not send are skipped, so a GraphQL GET
+/// stays in the order of those calls and an image or video fetch stays in
+/// the order of the CDN calls. `x-twitter-polling` and `origin` sit where the
+/// few requests that send them placed them.
+fn wire_header_order(purpose: Purpose) -> Vec<HeaderName> {
+   let names: &[&str] = match purpose {
+      Purpose::Api => {
+         &[
+            "sec-gpc",
+            "sec-ch-ua-platform",
+            "authorization",
+            "x-csrf-token",
+            "sec-ch-ua",
+            "x-twitter-client-language",
+            "sec-ch-ua-mobile",
+            "x-twitter-active-user",
+            "x-client-transaction-id",
+            "x-twitter-auth-type",
+            "user-agent",
+            "dnt",
+            "x-twitter-polling",
+            "content-type",
+            "accept",
+            "origin",
+            "sec-fetch-site",
+            "sec-fetch-mode",
+            "sec-fetch-dest",
+            "referer",
+            "accept-encoding",
+            "accept-language",
+            "cookie",
+            "priority",
+         ]
+      },
+      Purpose::Media => {
+         &[
+            "sec-gpc",
+            "sec-ch-ua-platform",
+            "user-agent",
+            "sec-ch-ua",
+            "dnt",
+            "sec-ch-ua-mobile",
+            "accept",
+            "origin",
+            "sec-fetch-site",
+            "sec-fetch-mode",
+            "sec-fetch-dest",
+            "sec-fetch-storage-access",
+            "referer",
+            "accept-encoding",
+            "accept-language",
+            "range",
+            "if-range",
+            "cookie",
+            "priority",
+         ]
+      },
+   };
+   names
+      .iter()
+      .map(|name| HeaderName::from_static(name))
+      .collect()
+}
+
 fn build_client(
    identity: Identity,
    proxy: Option<&ProxyConfig>,
@@ -468,7 +535,11 @@ fn build_client(
       .http2_keep_alive_interval(KEEP_ALIVE_INTERVAL)
       .http2_keep_alive_timeout(KEEP_ALIVE_TIMEOUT)
       .http2_keep_alive_while_idle(true)
-      .tcp_nodelay(true);
+      .tcp_nodelay(true)
+      // Impersonation installs a document-navigation order. x.com's own calls
+      // use a different order, captured from Chrome 152, and headers missing
+      // from that list are appended after `priority`.
+      .http2_headers_order(wire_header_order(purpose));
    builder = match proxy {
       Some(proxy) => {
          builder.proxy(
@@ -756,6 +827,71 @@ mod tests {
       assert_eq!(proxy.url(), "http://alice:secret@squid.local:3128");
       let bare = parse_proxy("squid.local", "");
       assert_eq!(bare.url(), "http://squid.local:8080");
+   }
+
+   #[test]
+   fn api_header_order_matches_the_chrome_capture() {
+      let order = wire_header_order(Purpose::Api);
+      let mut headers = HeaderMap::new();
+      // Inserted backwards on purpose: the wire order is the capture, not
+      // insertion order.
+      for name in [
+         "priority",
+         "cookie",
+         "accept-language",
+         "accept-encoding",
+         "referer",
+         "sec-fetch-dest",
+         "sec-fetch-mode",
+         "sec-fetch-site",
+         "accept",
+         "content-type",
+         "user-agent",
+         "x-twitter-auth-type",
+         "x-client-transaction-id",
+         "x-twitter-active-user",
+         "sec-ch-ua-mobile",
+         "x-twitter-client-language",
+         "sec-ch-ua",
+         "x-csrf-token",
+         "authorization",
+         "sec-ch-ua-platform",
+      ] {
+         headers.insert(HeaderName::from_static(name), HeaderValue::from_static("x"));
+      }
+      let positions: std::collections::HashMap<&HeaderName, usize> = order
+         .iter()
+         .enumerate()
+         .map(|(index, name)| (name, index))
+         .collect();
+      let mut names: Vec<HeaderName> = headers.keys().cloned().collect();
+      names.sort_by_key(|name| positions.get(name).copied().unwrap_or(order.len()));
+      let joined: Vec<&str> = names.iter().map(HeaderName::as_str).collect();
+      assert_eq!(
+         joined,
+         vec![
+            "sec-ch-ua-platform",
+            "authorization",
+            "x-csrf-token",
+            "sec-ch-ua",
+            "x-twitter-client-language",
+            "sec-ch-ua-mobile",
+            "x-twitter-active-user",
+            "x-client-transaction-id",
+            "x-twitter-auth-type",
+            "user-agent",
+            "content-type",
+            "accept",
+            "sec-fetch-site",
+            "sec-fetch-mode",
+            "sec-fetch-dest",
+            "referer",
+            "accept-encoding",
+            "accept-language",
+            "cookie",
+            "priority",
+         ]
+      );
    }
 
    #[test]

@@ -429,6 +429,19 @@ impl ApiClient {
       parser::parse_timeline(&data)
    }
 
+   /// Profile Reposts tab (`UserRepostsTimeline`).
+   pub async fn get_user_reposts(&self, user_id: &str, cursor: Option<&str>) -> Result<Timeline> {
+      let data = self
+         .graphql_request::<UserTimelineData>(
+            endpoints::GRAPH_USER_REPOSTS,
+            &endpoints::user_reposts_vars(user_id, cursor),
+            endpoints::USER_REPOSTS_FEATURES,
+            Some(endpoints::USER_REPOSTS_FIELD_TOGGLES),
+         )
+         .await?;
+      parser::parse_timeline(&data)
+   }
+
    async fn posts_from_replies(&self, user_id: &str) -> Result<Timeline> {
       let mut timeline = self.get_user_tweets_and_replies(user_id, None).await?;
       timeline.keep_posts();

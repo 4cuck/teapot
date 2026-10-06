@@ -65,6 +65,10 @@ pub fn rss_media(username: &str) -> String {
    rss(&format!("media:{}", username.to_lowercase()))
 }
 
+pub fn rss_reposts(username: &str) -> String {
+   rss(&format!("reposts:{}", username.to_lowercase()))
+}
+
 pub fn rss_search(query: &str) -> String {
    rss(&format!("search:{}", query.to_lowercase()))
 }

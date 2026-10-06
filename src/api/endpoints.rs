@@ -27,6 +27,8 @@ pub const GRAPH_LIST_BY_SLUG: &str = "K6wihoTiTrzNzSF8y1aeKQ/ListBySlug";
 pub const GRAPH_LIST_TWEETS: &str = "VQf8_XQynI3WzH6xopOMMQ/ListTimeline";
 pub const GRAPH_LIST_MEMBERS: &str = "BQp2IEYkgxuSxqbTAr1e1g/ListMembers";
 pub const GRAPH_USER_TWEETS_AND_REPLIES: &str = "kkaJ0Mf34PZVarrxzLihjg/UserTweetsAndReplies";
+/// Web query for a profile's Reposts tab, from a logged-in Chrome capture.
+pub const GRAPH_USER_REPOSTS: &str = "xqXxsWU5PFYzr90dfab6rg/UserRepostsTimeline";
 pub const GRAPH_USER_TWEETS_AND_REPLIES_V2: &str =
    "BDX77Xzqypdt11-mDfgdpQ/UserWithProfileTweetsAndRepliesQueryV2";
 pub const GRAPH_TWEET_EDIT_HISTORY: &str = "upS9teTSG45aljmP9oTuXA/TweetEditHistory";
@@ -57,6 +59,11 @@ pub const GQL_FEATURES: &str = r#"{"android_ad_formats_media_component_render_ov
 
 pub const USER_FIELD_TOGGLES: &str = r#"{"withPayments":false,"withAuxiliaryUserLabels":true}"#;
 pub const USER_TWEETS_FIELD_TOGGLES: &str = r#"{"withArticlePlainText":false}"#;
+pub const USER_REPOSTS_FIELD_TOGGLES: &str =
+   r#"{"withPayments":false,"withArticlePlainText":false}"#;
+/// Features sent with `UserRepostsTimeline` in the same capture. The query
+/// id is paired with this set; the older shared blob is a different generation.
+pub const USER_REPOSTS_FEATURES: &str = r#"{"rweb_video_screen_enabled":false,"rweb_cashtags_enabled":true,"profile_label_improvements_pcf_label_in_post_enabled":true,"responsive_web_profile_redirect_enabled":true,"rweb_tipjar_consumption_enabled":false,"verified_phone_label_enabled":false,"creator_subscriptions_tweet_preview_api_enabled":true,"responsive_web_graphql_timeline_navigation_enabled":true,"premium_content_api_read_enabled":false,"communities_web_enable_tweet_community_results_fetch":true,"c9s_tweet_anatomy_moderator_badge_enabled":true,"responsive_web_grok_analyze_button_fetch_trends_enabled":false,"responsive_web_grok_analyze_post_followups_enabled":true,"rweb_cashtags_composer_attachment_enabled":true,"responsive_web_jetfuel_frame":true,"rweb_sports_post_context_enabled":true,"responsive_web_grok_share_attachment_enabled":true,"responsive_web_grok_annotations_enabled":true,"articles_preview_enabled":true,"responsive_web_edit_tweet_api_enabled":true,"rweb_conversational_replies_downvote_enabled":false,"graphql_is_translatable_rweb_tweet_is_translatable_enabled":true,"view_counts_everywhere_api_enabled":true,"longform_notetweets_consumption_enabled":true,"responsive_web_twitter_article_tweet_consumption_enabled":true,"content_disclosure_indicator_enabled":true,"content_disclosure_ai_generated_indicator_enabled":true,"responsive_web_grok_show_grok_translated_post":true,"responsive_web_grok_analysis_button_from_backend":true,"post_ctas_fetch_enabled":false,"freedom_of_speech_not_reach_fetch_enabled":true,"standardized_nudges_misinfo":true,"tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled":true,"longform_notetweets_rich_text_read_enabled":true,"longform_notetweets_inline_media_enabled":false,"responsive_web_nested_quote_preview_enabled":true,"responsive_web_grok_image_annotation_enabled":true,"responsive_web_grok_imagine_annotation_enabled":true,"responsive_web_grok_community_note_auto_translation_is_enabled":true,"responsive_web_enhance_cards_enabled":false}"#;
 pub const TWEET_DETAIL_FIELD_TOGGLES: &str = r#"{"withArticleRichContentState":true,"withArticlePlainText":false,"withGrokAnalyze":false,"withDisallowedReplyControls":false}"#;
 
 // ── Helper ──────────────────────────────────────────────────────────────
@@ -87,6 +94,13 @@ pub fn user_tweets_vars(user_id: &str, cursor: Option<&str>) -> String {
       "userId": user_id, "cursor": cursor, "count": 20,
       "includePromotedContent": false,
       "withQuickPromoteEligibilityTweetFields": true, "withVoice": true,
+   }))
+}
+
+pub fn user_reposts_vars(user_id: &str, cursor: Option<&str>) -> String {
+   vars(json!({
+      "userId": user_id, "cursor": cursor, "count": 20,
+      "includePromotedContent": true, "withVoice": true,
    }))
 }
 

@@ -73,6 +73,7 @@ pub fn render_user_rss_with_pinned(
    let url_prefix = config.url_prefix();
    let feed_path = match feed_kind {
       "replies" => format!("/{}/with_replies/rss", user.username),
+      "reposts" => format!("/{}/reposts/rss", user.username),
       "media" => format!("/{}/media/rss", user.username),
       _ => format!("/{}/rss", user.username),
    };

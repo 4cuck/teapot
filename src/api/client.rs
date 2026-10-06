@@ -903,10 +903,8 @@ impl ApiClient {
                   .parse()
                   .map_err(|_| Error::Internal("invalid cookie header value".into()))?,
             );
-            headers.insert(
-               header::ORIGIN,
-               header::HeaderValue::from_static("https://x.com"),
-            );
+            // A same-origin GraphQL GET does not send Origin. Account settings
+            // and form posts do, and those builders add it themselves.
             headers.insert(
                header::CONTENT_TYPE,
                header::HeaderValue::from_static("application/json"),
