@@ -143,6 +143,7 @@ impl SearchQuery {
          Some("replies") => QueryKind::Replies,
          Some("media") => QueryKind::Media,
          Some("users") => QueryKind::Users,
+         Some("lists") => QueryKind::Lists,
          Some("top") => QueryKind::Top,
          _ => QueryKind::Posts,
       };
@@ -230,6 +231,7 @@ fn is_scroll_request(params: &SearchQuery) -> bool {
 fn search_tab(params: &SearchQuery) -> &'static str {
    match params.filter.as_deref() {
       Some("users") => "users",
+      Some("lists") => "lists",
       Some("top") => "top",
       Some("media") => "media",
       _ => "tweets",
@@ -366,6 +368,7 @@ async fn search(
                Some(&prefs),
             )
          },
+         "lists" => search_view::render_list_search_results(&raw_q, &[], &state.config, None, None),
          _ => {
             let empty_tweets = Vec::new();
             search_view::render_search_results_with_prefs(
@@ -387,7 +390,85 @@ async fn search(
       return Ok(Html(markup.into_string()).into_response());
    }
 
-   if active_tab == "users" {
+   if active_tab == "lists" {
+      let search_result = if params.cursor.is_none() {
+         let cache_key = cache_keys::search_lists(&raw_q, None);
+         if let Some(cached) =
+            helpers::swr_take::<PaginatedResult<crate::types::List>, _, _>(&state, &cache_key, {
+               let raw_q = raw_q.clone();
+               let cache_key = cache_key.clone();
+               move |state| async move {
+                  if let Ok(data) = state.api.search_lists(&raw_q, None).await {
+                     state
+                        .cache
+                        .set_swr(&cache_key, &data, ttl::SEARCH, ttl::SEARCH_STALE);
+                  }
+               }
+            })
+         {
+            Ok(cached)
+         } else {
+            let result = state.api.search_lists(&raw_q, None).await;
+            if let Ok(ref data) = result {
+               state
+                  .cache
+                  .set_swr(&cache_key, data, ttl::SEARCH, ttl::SEARCH_STALE);
+            }
+            result
+         }
+      } else {
+         state
+            .api
+            .search_lists(&raw_q, params.cursor.as_deref())
+            .await
+      };
+
+      match search_result {
+         Ok(result) => {
+            let cursor = result.bottom.as_deref();
+            let newer_url = params.cursor.is_some().then(|| {
+               format!(
+                  "/search?q={}&f=lists",
+                  percent_encoding::utf8_percent_encode(&raw_q, percent_encoding::NON_ALPHANUMERIC)
+               )
+            });
+            let content = search_view::render_list_search_results(
+               &raw_q,
+               &result.content,
+               &state.config,
+               cursor,
+               newer_url.as_deref(),
+            );
+            let title = format!("Search ({raw_q}) | Lists");
+            let canonical = format!(
+               "https://x.com/search?q={}&src=typed_query&f=lists",
+               percent_encoding::utf8_percent_encode(&raw_q, percent_encoding::NON_ALPHANUMERIC)
+            );
+            let referer = format!(
+               "/search?q={}&f=lists",
+               percent_encoding::utf8_percent_encode(&raw_q, percent_encoding::NON_ALPHANUMERIC)
+            );
+            if is_scroll {
+               return Ok(Html(content.into_string()).into_response());
+            }
+            let markup = layout::PageLayout::new(&state.config, &title, content)
+               .prefs(&prefs)
+               .canonical(&canonical)
+               .referer(&referer)
+               .render();
+            Ok(Html(markup.into_string()).into_response())
+         },
+         Err(err) => {
+            Ok(search_error(
+               &state.config,
+               &prefs,
+               raw_qs.as_deref(),
+               &params,
+               &err,
+            ))
+         },
+      }
+   } else if active_tab == "users" {
       let search_result = if params.cursor.is_none() {
          let cache_key = cache_keys::search_users(&raw_q, None);
          if let Some(cached) = helpers::swr_take::<PaginatedResult<User>, _, _>(&state, &cache_key, {

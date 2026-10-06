@@ -184,6 +184,9 @@ pub struct ItemInner {
 pub struct ItemContent {
    pub tweet_results:      Option<NestedResult<TweetData>>,
    pub user_results:       Option<NestedResult<UserData>>,
+   /// Present on a search Lists hit (`TimelineTwitterList`).
+   #[serde(default)]
+   pub list:               Option<ListData>,
    #[serde(rename = "tweetDisplayType")]
    pub tweet_display_type: Option<String>,
    pub value:              Option<String>,
@@ -231,6 +234,10 @@ impl Entry {
          .as_deref()
    }
 
+   pub fn list_result(&self) -> Option<&ListData> {
+      self.content.as_ref()?.item_content.as_ref()?.list.as_ref()
+   }
+
    pub fn cursor_value(&self) -> Option<&str> {
       let content = self.content.as_ref()?;
       content
@@ -275,6 +282,10 @@ impl Item {
 
    pub fn cursor_value(&self) -> Option<&str> {
       self.item_content()?.value.as_deref()
+   }
+
+   pub fn list_result(&self) -> Option<&ListData> {
+      self.item_content()?.list.as_ref()
    }
 }
 
@@ -445,9 +456,20 @@ pub struct ListData {
    pub name:               Option<String>,
    pub description:        Option<String>,
    pub member_count:       i32,
+   pub subscriber_count:   i32,
+   #[serde(default)]
+   pub facepile_urls:      Vec<String>,
+   #[serde(default)]
+   pub followers_context:  String,
+   #[serde(default)]
+   pub members_context:    String,
    pub user_results:       Option<NestedResult<UserData>>,
    #[serde(default, deserialize_with = "deser_banner_url")]
    pub banner_url:         Option<String>,
+   #[serde(default, deserialize_with = "deser_banner_url")]
+   pub custom_banner_media: Option<String>,
+   #[serde(default, deserialize_with = "deser_banner_url")]
+   pub default_banner_media: Option<String>,
 }
 
 // ── Tweet types ─────────────────────────────────────────────────────────

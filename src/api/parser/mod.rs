@@ -17,6 +17,7 @@ pub use conversation::parse_conversation;
 pub use search::{
    parse_list,
    parse_list_members,
+   parse_list_search,
    parse_retweeters,
    parse_user_search,
 };

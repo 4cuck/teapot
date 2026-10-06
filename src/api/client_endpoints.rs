@@ -686,13 +686,58 @@ impl ApiClient {
       Ok(parser::parse_user_search(&data))
    }
 
+   /// Search lists. Uses the web client's Lists query id and variables.
+   /// A denylisted string is remembered and rewritten the same way a post
+   /// search is.
+   pub async fn search_lists(
+      &self,
+      query: &str,
+      cursor: Option<&str>,
+   ) -> Result<PaginatedResult<List>> {
+      let sent = self.denylist.prepare(query);
+      match self.fetch_list_search(&sent, cursor).await {
+         Err(Error::SearchDenylisted) => {
+            tracing::info!(query = sent, "X denylisted this search, remembering it");
+            self.denylist.remember(&sent);
+            let retry = bypass_denylist(&sent);
+            if retry == sent {
+               return Err(Error::SearchDenylisted);
+            }
+            match self.fetch_list_search(&retry, cursor).await {
+               Err(Error::SearchDenylisted) => {
+                  self.denylist.remember(&retry);
+                  Err(Error::SearchDenylisted)
+               },
+               other => other,
+            }
+         },
+         other => other,
+      }
+   }
+
+   async fn fetch_list_search(
+      &self,
+      query: &str,
+      cursor: Option<&str>,
+   ) -> Result<PaginatedResult<List>> {
+      let data = self
+         .graphql_request::<SearchTimelineData>(
+            endpoints::GRAPH_SEARCH_LISTS,
+            &endpoints::search_list_vars(query, cursor),
+            endpoints::LIST_SEARCH_FEATURES,
+            None,
+         )
+         .await?;
+      Ok(parser::parse_list_search(&data))
+   }
+
    /// Get list by ID.
    pub async fn get_list(&self, list_id: &str) -> Result<List> {
       let data = self
          .graphql_request::<ListByIdData>(
             endpoints::GRAPH_LIST_BY_ID,
             &endpoints::list_by_id_vars(list_id),
-            endpoints::GQL_FEATURES,
+            endpoints::LIST_BY_ID_FEATURES,
             None,
          )
          .await?;
@@ -727,7 +772,7 @@ impl ApiClient {
          .graphql_request::<ListTimelineData>(
             endpoints::GRAPH_LIST_TWEETS,
             &endpoints::list_timeline_vars(list_id, cursor),
-            endpoints::GQL_FEATURES,
+            endpoints::LIST_SEARCH_FEATURES,
             None,
          )
          .await?;

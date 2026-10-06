@@ -158,5 +158,14 @@ pub struct List {
    pub username:    String,
    pub description: String,
    pub members:     i32,
+   pub subscribers: i32,
    pub banner:      String,
+   /// Custom list image. Empty when X would show a colored list icon instead.
+   pub cover:       String,
+   /// Short line X already formatted, such as "73 members".
+   pub members_text: String,
+   /// Short line X already formatted, such as "587 followers including @name".
+   pub followers:   String,
+   /// Member photos shown beside the follower line.
+   pub pictures:    Vec<String>,
 }

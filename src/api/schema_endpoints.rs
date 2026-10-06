@@ -202,14 +202,20 @@ pub struct ListTimelineData {
 #[serde(default)]
 pub struct ListTimelineNested {
    pub timeline_response: Option<TimelinePayload>,
+   /// Current web query `ListLatestTweetsTimeline` nests the posts here.
+   pub tweets_timeline:   Option<TimelinePayload>,
 }
 
 impl ListTimelineData {
    pub fn instructions(&self) -> &[Instruction] {
-      self
-         .list
+      self.list
          .as_ref()
-         .and_then(|nested| nested.timeline_response.as_ref())
+         .and_then(|nested| {
+            nested
+               .tweets_timeline
+               .as_ref()
+               .or(nested.timeline_response.as_ref())
+         })
          .map(|payload| payload.timeline.instructions.as_slice())
          .unwrap_or_default()
    }

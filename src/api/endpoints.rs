@@ -22,9 +22,11 @@ pub const GRAPH_USER_MEDIA: &str = "36oKqyQ7E_9CmtONGjJRsA/UserMedia";
 pub const GRAPH_USER_MEDIA_V2: &str = "bp0e_WdXqgNBIwlLukzyYA/MediaTimelineV2";
 pub const GRAPH_TWEET_DETAIL: &str = "flqCy6kvOMolEquuRpOaHQ/TweetDetail";
 pub const GRAPH_SEARCH_TIMELINE: &str = "hyPfJYJ_XAtDYoslQc-Rgg/SearchTimeline";
-pub const GRAPH_LIST_BY_ID: &str = "cIUpT1UjuGgl_oWiY7Snhg/ListByRestId";
+/// Current web query for the search Lists tab, from a logged-in Chrome capture.
+pub const GRAPH_SEARCH_LISTS: &str = "ph2fARFabkwfxqmSKQ1OPw/SearchTimeline";
+pub const GRAPH_LIST_BY_ID: &str = "T-YE5ZY0cd0UVtWu8AP04Q/ListByRestId";
 pub const GRAPH_LIST_BY_SLUG: &str = "K6wihoTiTrzNzSF8y1aeKQ/ListBySlug";
-pub const GRAPH_LIST_TWEETS: &str = "VQf8_XQynI3WzH6xopOMMQ/ListTimeline";
+pub const GRAPH_LIST_TWEETS: &str = "wD-euF_1WoOc5VygdYIhYA/ListLatestTweetsTimeline";
 pub const GRAPH_LIST_MEMBERS: &str = "BQp2IEYkgxuSxqbTAr1e1g/ListMembers";
 pub const GRAPH_USER_TWEETS_AND_REPLIES: &str = "kkaJ0Mf34PZVarrxzLihjg/UserTweetsAndReplies";
 /// Web query for a profile's Reposts tab, from a logged-in Chrome capture.
@@ -64,6 +66,10 @@ pub const USER_REPOSTS_FIELD_TOGGLES: &str =
 /// Features sent with `UserRepostsTimeline` in the same capture. The query
 /// id is paired with this set; the older shared blob is a different generation.
 pub const USER_REPOSTS_FEATURES: &str = r#"{"rweb_video_screen_enabled":false,"rweb_cashtags_enabled":true,"profile_label_improvements_pcf_label_in_post_enabled":true,"responsive_web_profile_redirect_enabled":true,"rweb_tipjar_consumption_enabled":false,"verified_phone_label_enabled":false,"creator_subscriptions_tweet_preview_api_enabled":true,"responsive_web_graphql_timeline_navigation_enabled":true,"premium_content_api_read_enabled":false,"communities_web_enable_tweet_community_results_fetch":true,"c9s_tweet_anatomy_moderator_badge_enabled":true,"responsive_web_grok_analyze_button_fetch_trends_enabled":false,"responsive_web_grok_analyze_post_followups_enabled":true,"rweb_cashtags_composer_attachment_enabled":true,"responsive_web_jetfuel_frame":true,"rweb_sports_post_context_enabled":true,"responsive_web_grok_share_attachment_enabled":true,"responsive_web_grok_annotations_enabled":true,"articles_preview_enabled":true,"responsive_web_edit_tweet_api_enabled":true,"rweb_conversational_replies_downvote_enabled":false,"graphql_is_translatable_rweb_tweet_is_translatable_enabled":true,"view_counts_everywhere_api_enabled":true,"longform_notetweets_consumption_enabled":true,"responsive_web_twitter_article_tweet_consumption_enabled":true,"content_disclosure_indicator_enabled":true,"content_disclosure_ai_generated_indicator_enabled":true,"responsive_web_grok_show_grok_translated_post":true,"responsive_web_grok_analysis_button_from_backend":true,"post_ctas_fetch_enabled":false,"freedom_of_speech_not_reach_fetch_enabled":true,"standardized_nudges_misinfo":true,"tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled":true,"longform_notetweets_rich_text_read_enabled":true,"longform_notetweets_inline_media_enabled":false,"responsive_web_nested_quote_preview_enabled":true,"responsive_web_grok_image_annotation_enabled":true,"responsive_web_grok_imagine_annotation_enabled":true,"responsive_web_grok_community_note_auto_translation_is_enabled":true,"responsive_web_enhance_cards_enabled":false}"#;
+/// Same feature set the web client sent with the Lists search query.
+pub const LIST_SEARCH_FEATURES: &str = USER_REPOSTS_FEATURES;
+/// Features sent with `ListByRestId` when a list page opens.
+pub const LIST_BY_ID_FEATURES: &str = r#"{"profile_label_improvements_pcf_label_in_post_enabled":true,"responsive_web_profile_redirect_enabled":true,"rweb_tipjar_consumption_enabled":false,"verified_phone_label_enabled":false,"responsive_web_graphql_timeline_navigation_enabled":true}"#;
 pub const TWEET_DETAIL_FIELD_TOGGLES: &str = r#"{"withArticleRichContentState":true,"withArticlePlainText":false,"withGrokAnalyze":false,"withDisallowedReplyControls":false}"#;
 
 // ── Helper ──────────────────────────────────────────────────────────────
@@ -181,12 +187,23 @@ pub fn search_vars(raw_query: &str, cursor: Option<&str>, product: &str) -> Stri
    }))
 }
 
+/// Variables for the web client's Lists tab. `querySource` is `typed_query`
+/// on this query id, and the cursor is omitted on the first page.
+pub fn search_list_vars(raw_query: &str, cursor: Option<&str>) -> String {
+   vars(json!({
+      "rawQuery": raw_query, "cursor": cursor, "count": 20,
+      "querySource": "typed_query", "product": "Lists",
+      "withGrokTranslatedBio": false,
+      "withQuickPromoteEligibilityTweetFields": false,
+   }))
+}
+
 pub fn list_by_id_vars(list_id: &str) -> String {
    json!({ "listId": list_id }).to_string()
 }
 
-pub fn list_timeline_vars(rest_id: &str, cursor: Option<&str>) -> String {
-   vars(json!({ "rest_id": rest_id, "cursor": cursor, "count": 20 }))
+pub fn list_timeline_vars(list_id: &str, cursor: Option<&str>) -> String {
+   vars(json!({ "listId": list_id, "cursor": cursor, "count": 20 }))
 }
 
 /// Build the Strato translate tweet URL.

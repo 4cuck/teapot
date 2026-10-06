@@ -694,9 +694,20 @@ impl ApiClient {
          },
       };
 
-      // Mark the session as limited on token errors so the retry picks
-      // a different one.
-      let api_check = Self::map_api_errors(&resp.errors);
+      // A list search (and some other timelines) returns the page plus one
+      // DecodeException per item for a banner field we do not read. Those
+      // are not a failed search when `data` is present.
+      let mut serious = Vec::new();
+      for err in &resp.errors {
+         if resp.data.is_some() && err.message.contains("DecodeException") {
+            continue;
+         }
+         serious.push(ApiError {
+            code:    err.code,
+            message: err.message.clone(),
+         });
+      }
+      let api_check = Self::map_api_errors(&serious);
       if let Err(Error::SessionRejected(ref msg)) = api_check {
          self.sessions.mark_rejected(session.id).await;
          return Err(Error::SessionRejected(msg.clone()));

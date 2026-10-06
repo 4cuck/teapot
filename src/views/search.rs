@@ -3,9 +3,17 @@ use maud::{Markup, html};
 use super::timeline::{render_media_view_tabs, render_timeline_with_view};
 use crate::{
    config::Config,
-   types::{Prefs, Tweets, User},
+   types::{
+      List,
+      Prefs,
+      Tweets,
+      User,
+   },
    utils::formatters,
-   views::{renderutils::icon, user_list::render_user},
+   views::{
+      renderutils::icon,
+      user_list::render_user,
+   },
 };
 
 /// Search pagination URL. The Twitter cursor is opaque and must be encoded —
@@ -162,13 +170,128 @@ pub fn render_user_search_results(
    }
 }
 
-/// Render search tabs (Top / Latest / Media / Users).
+/// Render list search results.
+pub fn render_list_search_results(
+   query: &str,
+   lists: &[List],
+   config: &Config,
+   cursor: Option<&str>,
+   newer_url: Option<&str>,
+) -> Markup {
+   html! {
+       div class="timeline-container search-results" {
+           div class="timeline-header" {
+               form method="get" action="/search" class="search-field user-search-field" autocomplete="off" {
+                   input type="hidden" name="f" value="lists";
+                   div class="pref-group pref-input pref-inline" {
+                       input type="text" name="q" value=(query) placeholder="Search lists...";
+                   }
+                   button type="submit" { span class="icon-search" {} }
+               }
+           }
+
+           (render_search_tabs(query, "lists", ""))
+
+           div class="timeline" {
+               @if let Some(url) = newer_url {
+                   div class="timeline-item show-more" {
+                       a href=(url) { "Load newest" }
+                   }
+               }
+
+               @if lists.is_empty() {
+                   div class="timeline-header" {
+                       h2 class="timeline-none" { "No items found" }
+                   }
+               } @else {
+                   @for list in lists {
+                       (render_list_hit(list, config))
+                   }
+
+                   @if let Some(cur) = cursor {
+                       div class="show-more" {
+                           a href=(search_page_url(query, "lists", Some(cur), "")) {
+                               "Load more"
+                           }
+                       }
+                   } @else {
+                       div class="timeline-footer" {
+                           h2 class="timeline-end" { "No more items" }
+                       }
+                   }
+               }
+           }
+       }
+   }
+}
+
+fn render_list_hit(list: &List, config: &Config) -> Markup {
+   let href = format!("/i/lists/{}", list.id);
+   let members = if list.members_text.is_empty() {
+      match list.members {
+         1 => "1 member".to_owned(),
+         count => format!("{count} members"),
+      }
+   } else {
+      list.members_text.clone()
+   };
+   let color = list_icon_color(&list.id);
+   html! {
+       div class="timeline-item list-hit" {
+           a class="tweet-link" href=(&href) {}
+           a class="list-thumb" href=(&href) {
+               @if list.cover.is_empty() {
+                   span class="list-thumb-icon" style=(format!("background:{color}")) {
+                       svg viewBox="0 0 24 24" aria-hidden="true" {
+                           path d="M4 6.5h16M4 12h16M4 17.5h10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" {}
+                       }
+                   }
+               } @else {
+                   img src=(formatters::get_pic_url(&list.cover, config.config.base64_media)) alt="" loading="lazy";
+               }
+           }
+           div class="list-hit-copy" {
+               div class="list-hit-title" {
+                   a href=(&href) { (list.name) }
+                   span class="list-hit-members" { " · " (members) }
+               }
+               @if !list.followers.is_empty() || !list.pictures.is_empty() {
+                   div class="list-hit-sub" {
+                       @if !list.pictures.is_empty() {
+                           span class="list-hit-faces" {
+                               @for picture in &list.pictures {
+                                   img src=(formatters::get_pic_url(picture, config.config.base64_media)) alt="" loading="lazy";
+                               }
+                           }
+                       }
+                       span class="list-hit-followers" { (list.followers) }
+                   }
+               }
+           }
+       }
+   }
+}
+
+/// Stable color for lists that have no image of their own.
+fn list_icon_color(id: &str) -> &'static str {
+   const COLORS: &[&str] = &[
+      "#8e8e93", "#ff9f0a", "#ffd60a", "#bf5af2", "#64d2ff", "#ff375f", "#30d158", "#5e5ce6",
+   ];
+   let mut hash = 0_usize;
+   for byte in id.bytes() {
+      hash = hash.wrapping_mul(33).wrapping_add(byte as usize);
+   }
+   COLORS[hash % COLORS.len()]
+}
+
+/// Render search tabs (Top / Latest / Media / Users / Lists).
 fn render_search_tabs(query: &str, active: &str, view: &str) -> Markup {
    let tabs: &[(&str, &str, String)] = &[
       ("top", "Top", search_tab_url(query, "top", "")),
       ("tweets", "Latest", search_tab_url(query, "tweets", "")),
       ("media", "Media", search_tab_url(query, "media", view)),
       ("users", "Users", search_tab_url(query, "users", "")),
+      ("lists", "Lists", search_tab_url(query, "lists", "")),
    ];
    html! {
        ul class="tab" {
