@@ -151,6 +151,10 @@ pub enum Error {
    #[error("Invalid URL: {0}")]
    InvalidUrl(String),
 
+   /// X's Search Content Control tool rejected this exact query string.
+   #[error("Search query denylisted")]
+   SearchDenylisted,
+
    #[error("HMAC verification failed")]
    HmacVerification,
 
@@ -199,6 +203,13 @@ impl Error {
             )
          },
          Self::InvalidUrl(ref message) => (StatusCode::BAD_REQUEST, "Bad request", message),
+         Self::SearchDenylisted => {
+            (
+               StatusCode::BAD_REQUEST,
+               "Search blocked",
+               "X will not run that search.",
+            )
+         },
          Self::HmacVerification => {
             (
                StatusCode::FORBIDDEN,

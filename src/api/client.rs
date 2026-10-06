@@ -290,6 +290,7 @@ pub struct ApiClient {
    tid:                 TidClient,
    budget:              ClientBudget,
    tid_enabled:         bool,
+   denylist:            super::search_denylist::SearchDenylist,
 }
 
 impl ApiClient {
@@ -308,6 +309,9 @@ impl ApiClient {
       let proxies = proxies.map(Arc::new);
       let tid = TidClient::new(client.clone(), sessions.clone(), proxies.clone());
 
+      let denylist_path = std::env::var("TEAPOT_SEARCH_DENYLIST")
+         .unwrap_or_else(|_| "search-denylist.json".to_owned());
+
       Self {
          client,
          sessions,
@@ -315,6 +319,7 @@ impl ApiClient {
          tid,
          budget: ClientBudget::new(config.config.client_budget),
          tid_enabled: !config.config.disable_tid,
+         denylist: super::search_denylist::SearchDenylist::load(denylist_path),
       }
    }
 
@@ -380,15 +385,16 @@ impl ApiClient {
          return Ok(());
       };
 
-      if error.code == 214 {
-         if error.message.contains("Unknown request cursor") {
-            return Err(Error::InvalidUrl(
-               "This page has expired. Go back and try again.".into(),
-            ));
-         }
-         if error.message.contains("denylist") {
-            return Err(Error::InvalidUrl(error.message.clone()));
-         }
+      if error.message.contains("QueryDenylistedFailure")
+         || error.message.contains("Query is denylisted")
+      {
+         return Err(Error::SearchDenylisted);
+      }
+
+      if error.code == 214 && error.message.contains("Unknown request cursor") {
+         return Err(Error::InvalidUrl(
+            "This page has expired. Go back and try again.".into(),
+         ));
       }
 
       if let Some(twitter_err) = TwitterError::from_code(error.code) {

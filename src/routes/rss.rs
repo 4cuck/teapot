@@ -29,6 +29,8 @@ use crate::{
    },
    types::{
       Profile,
+      Query as SearchQuery,
+      QueryKind,
       Tweet,
    },
    views::rss as rss_view,
@@ -197,7 +199,14 @@ async fn search_rss(
       return Ok(cached);
    }
 
-   let timeline = state.api.search(search_query, None, "Latest").await?;
+   let timeline = state
+      .api
+      .search(
+         &SearchQuery::parse(search_query, QueryKind::Posts).build(),
+         None,
+         "Latest",
+      )
+      .await?;
    let tweets = timeline.content.into_iter().flatten().collect::<Vec<_>>();
    let rss = rss_view::render_search_rss(search_query, &tweets, &state.config);
 

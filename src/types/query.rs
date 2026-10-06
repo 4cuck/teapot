@@ -95,7 +95,8 @@ impl Query {
 
       // Only force-include retweets for from:user searches (a profile-style
       // feed). Keyword search would otherwise repeat the same viral tweet
-      // once per retweeter.
+      // once per retweeter. A query X has denylisted is rewritten later, and
+      // only that query, so the extra operator is not on every search.
       if !self.from_user.is_empty() && !self.excludes.contains(&"nativeretweets".to_owned()) {
          param.push_str("include:nativeretweets ");
       }
@@ -338,8 +339,8 @@ mod tests {
 
    #[test]
    fn keyword_search_does_not_force_nativeretweets() {
-      let query = Query::parse("marefair", QueryKind::Posts);
-      assert!(!query.build().contains("include:nativeretweets"));
+      let query = Query::parse("teen", QueryKind::Posts);
+      assert_eq!(query.build(), "teen");
    }
 
    #[test]

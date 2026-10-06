@@ -3,6 +3,7 @@ use std::{
    time::Duration,
 };
 
+use super::super::search_denylist::bypass_denylist;
 use super::{
    AboutAccountData,
    AccountContext,
@@ -569,7 +570,37 @@ impl ApiClient {
    }
 
    /// Search tweets.
+   ///
+   /// A query X has already rejected is rewritten before the request. A new
+   /// rejection is saved and retried once with that rewrite.
    pub async fn search(
+      &self,
+      query: &str,
+      cursor: Option<&str>,
+      product: &str,
+   ) -> Result<Timeline> {
+      let sent = self.denylist.prepare(query);
+      match self.fetch_search(&sent, cursor, product).await {
+         Err(Error::SearchDenylisted) => {
+            tracing::info!(query = sent, "X denylisted this search, remembering it");
+            self.denylist.remember(&sent);
+            let retry = bypass_denylist(&sent);
+            if retry == sent {
+               return Err(Error::SearchDenylisted);
+            }
+            match self.fetch_search(&retry, cursor, product).await {
+               Err(Error::SearchDenylisted) => {
+                  self.denylist.remember(&retry);
+                  Err(Error::SearchDenylisted)
+               },
+               other => other,
+            }
+         },
+         other => other,
+      }
+   }
+
+   async fn fetch_search(
       &self,
       query: &str,
       cursor: Option<&str>,
@@ -598,8 +629,35 @@ impl ApiClient {
       Ok(timeline)
    }
 
-   /// Search users.
+   /// Search users. A denylisted string is remembered and rewritten the same
+   /// way a post search is.
    pub async fn search_users(
+      &self,
+      query: &str,
+      cursor: Option<&str>,
+   ) -> Result<PaginatedResult<User>> {
+      let sent = self.denylist.prepare(query);
+      match self.fetch_user_search(&sent, cursor).await {
+         Err(Error::SearchDenylisted) => {
+            tracing::info!(query = sent, "X denylisted this search, remembering it");
+            self.denylist.remember(&sent);
+            let retry = bypass_denylist(&sent);
+            if retry == sent {
+               return Err(Error::SearchDenylisted);
+            }
+            match self.fetch_user_search(&retry, cursor).await {
+               Err(Error::SearchDenylisted) => {
+                  self.denylist.remember(&retry);
+                  Err(Error::SearchDenylisted)
+               },
+               other => other,
+            }
+         },
+         other => other,
+      }
+   }
+
+   async fn fetch_user_search(
       &self,
       query: &str,
       cursor: Option<&str>,

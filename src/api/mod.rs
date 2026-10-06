@@ -7,6 +7,7 @@ mod filters;
 pub mod http;
 mod parser;
 mod proxy_pool;
+mod search_denylist;
 pub mod schema;
 mod tid;
 
