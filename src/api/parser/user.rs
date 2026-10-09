@@ -69,6 +69,7 @@ impl TryFrom<&UserData> for User {
       let website = legacy
          .entities
          .first()
+         .or_else(|| raw.profile_bio.as_ref()?.entities.first())
          .and_then(|url_item| url_item.expanded_url.as_deref())
          .unwrap_or_default()
          .to_owned();
@@ -80,7 +81,11 @@ impl TryFrom<&UserData> for User {
          .replace("_normal", "_400x400");
 
       let banner = {
-         let url = legacy.profile_banner_url.as_deref().unwrap_or_default();
+         let url = legacy
+            .profile_banner_url
+            .as_deref()
+            .or_else(|| raw.banner.as_ref()?.image_url.as_deref())
+            .unwrap_or_default();
          if url.is_empty() {
             let color = legacy.profile_link_color.as_deref().unwrap_or_default();
             if color.is_empty() {
@@ -93,11 +98,25 @@ impl TryFrom<&UserData> for User {
          }
       };
 
-      let followers = legacy.followers_count;
-      let following = legacy.friends_count;
-      let tweets = legacy.statuses_count;
-      let likes = legacy.favourites_count;
-      let media = legacy.media_count;
+      let relationship = raw.relationship_counts.as_ref();
+      let tweet_counts = raw.tweet_counts.as_ref();
+      let followers = relationship
+         .and_then(|counts| counts.followers)
+         .unwrap_or(legacy.followers_count);
+      let following = relationship
+         .and_then(|counts| counts.following)
+         .unwrap_or(legacy.friends_count);
+      let tweets = tweet_counts
+         .and_then(|counts| counts.tweets)
+         .unwrap_or(legacy.statuses_count);
+      let media = tweet_counts
+         .and_then(|counts| counts.media_tweets)
+         .unwrap_or(legacy.media_count);
+      let likes = raw
+         .action_counts
+         .as_ref()
+         .and_then(|counts| counts.favorites_count)
+         .unwrap_or(legacy.favourites_count);
       let protected = raw
          .privacy
          .as_ref()
@@ -128,6 +147,7 @@ impl TryFrom<&UserData> for User {
       let pinned_tweet = legacy
          .pinned_tweet_ids_str
          .as_ref()
+         .or_else(|| raw.pinned_items.as_ref()?.tweet_ids_str.as_ref())
          .and_then(|ids| ids.first())
          .and_then(|id_str| id_str.parse().ok())
          .unwrap_or(0);
@@ -229,5 +249,51 @@ impl TryFrom<&UserData> for User {
          suspended,
          join_date,
       })
+   }
+}
+
+#[cfg(test)]
+mod tests {
+   use super::*;
+
+   #[test]
+   fn reads_the_web_client_user_shape_without_legacy() {
+      let raw: UserData = serde_json::from_str(
+         r#"{
+            "__typename": "User",
+            "rest_id": "11348282",
+            "is_blue_verified": true,
+            "core": {"created_at": "Wed Dec 19 20:20:32 +0000 2007", "name": "NASA", "screen_name": "NASA"},
+            "avatar": {"image_url": "https://pbs.twimg.com/profile_images/1/a_normal.jpg"},
+            "banner": {"image_url": "https://pbs.twimg.com/profile_banners/11348282/1788992290"},
+            "relationship_counts": {"followers": 92333956, "following": 115},
+            "tweet_counts": {"media_tweets": 28192, "tweets": 74412},
+            "action_counts": {"favorites_count": 17027},
+            "profile_bio": {"description": "Exploring the universe.", "entities": {"description": {}, "url": {"urls": [{"display_url": "nasa.gov", "expanded_url": "http://www.nasa.gov/", "indices": [0, 23], "url": "https://t.co/x"}]}}},
+            "location": {"location": "Pale Blue Dot"},
+            "privacy": {"protected": false},
+            "verification": {"verified": false, "verified_type": "Government"},
+            "pinned_items": {"tweet_ids_str": ["2107896916595884177"]}
+         }"#,
+      )
+      .unwrap();
+      let user = User::try_from(&raw).unwrap();
+      assert_eq!(user.username, "NASA");
+      assert_eq!(user.fullname, "NASA");
+      assert_eq!(user.followers, 92_333_956);
+      assert_eq!(user.following, 115);
+      assert_eq!(user.tweets, 74_412);
+      assert_eq!(user.media, 28_192);
+      assert_eq!(user.likes, 17_027);
+      assert_eq!(user.website, "http://www.nasa.gov/");
+      assert_eq!(
+         user.banner,
+         "https://pbs.twimg.com/profile_banners/11348282/1788992290/1500x500"
+      );
+      assert_eq!(user.pinned_tweet, 2_107_896_916_595_884_177);
+      assert_eq!(user.bio, "Exploring the universe.");
+      assert_eq!(user.location, "Pale Blue Dot");
+      assert_eq!(user.verified_type, VerifiedType::Government);
+      assert!(user.join_date.is_some());
    }
 }

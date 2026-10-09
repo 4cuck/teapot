@@ -601,6 +601,44 @@ pub struct UserData {
    pub verification:        Option<Verification>,
    pub privacy:             Option<Privacy>,
    pub about_profile:       Option<AboutProfile>,
+   // The web client's current user shape carries no `legacy`; these hold
+   // what used to be in it.
+   pub banner:              Option<UserBanner>,
+   pub relationship_counts: Option<RelationshipCounts>,
+   pub tweet_counts:        Option<TweetCounts>,
+   pub action_counts:       Option<ActionCounts>,
+   pub pinned_items:        Option<PinnedItems>,
+}
+
+#[derive(Deserialize, Default)]
+pub struct UserBanner {
+   pub image_url: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct RelationshipCounts {
+   pub followers: Option<i64>,
+   pub following: Option<i64>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct TweetCounts {
+   pub tweets:       Option<i64>,
+   pub media_tweets: Option<i64>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct ActionCounts {
+   pub favorites_count: Option<i64>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct PinnedItems {
+   pub tweet_ids_str: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -661,6 +699,8 @@ pub struct UserLocation {
 #[derive(Deserialize, Default)]
 pub struct ProfileBio {
    pub description: Option<String>,
+   #[serde(default, deserialize_with = "deser_user_url_entities")]
+   pub entities:    Vec<UrlEntity>,
 }
 
 #[derive(Deserialize, Default)]
