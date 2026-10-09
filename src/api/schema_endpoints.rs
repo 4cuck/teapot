@@ -18,6 +18,10 @@ pub struct ApiError {
    pub code:    i64,
    #[serde(default)]
    pub message: String,
+   /// Where in `data` the failed field sits. Empty for an error about the
+   /// whole request.
+   #[serde(default)]
+   pub path:    Vec<serde_json::Value>,
 }
 
 // ── X Spaces ──

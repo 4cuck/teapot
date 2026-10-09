@@ -82,6 +82,32 @@ const GRAPHQL_REPLACEMENTS: usize = 2;
 /// not walk the pool — that used to zero every cookie for 15 minutes.
 const RATE_LIMIT_REPLACEMENTS: usize = 5;
 
+fn is_denylisted(message: &str) -> bool {
+   message.contains("QueryDenylistedFailure") || message.contains("Query is denylisted")
+}
+
+/// The errors that fail a request. X returns the page plus an error for
+/// each field it could not fill, such as a list banner it cannot decode or
+/// one post's long-form text. Such an error names the field in `path`, so
+/// with `data` present the rest of the page stands. A denylisted search
+/// keeps its meaning wherever X reports it.
+fn request_errors(errors: &[ApiError], has_data: bool) -> Vec<ApiError> {
+   errors
+      .iter()
+      .filter(|err| {
+         let one_field = !err.path.is_empty() || err.message.contains("DecodeException");
+         !(has_data && one_field && !is_denylisted(&err.message))
+      })
+      .map(|err| {
+         ApiError {
+            code:    err.code,
+            message: err.message.clone(),
+            path:    err.path.clone(),
+         }
+      })
+      .collect()
+}
+
 /// Community-cache strings are written by third parties, so cap them before
 /// they reach a page.
 fn clamp_community_value(value: Option<String>) -> String {
@@ -404,9 +430,7 @@ impl ApiClient {
          return Ok(());
       };
 
-      if error.message.contains("QueryDenylistedFailure")
-         || error.message.contains("Query is denylisted")
-      {
+      if is_denylisted(&error.message) {
          return Err(Error::SearchDenylisted);
       }
 
@@ -776,18 +800,13 @@ impl ApiClient {
          },
       };
 
-      // A list search (and some other timelines) returns the page plus one
-      // DecodeException per item for a banner field we do not read. Those
-      // are not a failed search when `data` is present.
-      let mut serious = Vec::new();
-      for err in &resp.errors {
-         if resp.data.is_some() && err.message.contains("DecodeException") {
-            continue;
-         }
-         serious.push(ApiError {
-            code:    err.code,
-            message: err.message.clone(),
-         });
+      let serious = request_errors(&resp.errors, resp.data.is_some());
+      if serious.len() < resp.errors.len() {
+         tracing::debug!(
+            endpoint,
+            fields = resp.errors.len() - serious.len(),
+            "X left some fields of the answer empty"
+         );
       }
       let api_check = Self::map_api_errors(&serious);
       if let Err(Error::SessionRejected(ref msg)) = api_check {
@@ -1168,6 +1187,29 @@ mod tests {
          space_id_from_url("https://x.com/i/spaces/1AxRnnrNvyDxl/peek?foo=bar"),
          Some("1AxRnnrNvyDxl")
       );
+   }
+
+   #[test]
+   fn an_error_in_one_field_leaves_the_page() {
+      let errors: Vec<ApiError> = serde_json::from_str(
+         r#"[
+            {"code": 214, "message": "BadRequest: BadRequest", "path": ["user", "result", "timeline", "timeline", "instructions", 1, "entries", 10, "content", "itemContent", "tweet_results", "result", "note_tweet", "note_tweet_results", "result", "text"]},
+            {"code": 214, "message": "BadRequest: com.twitter.strato.serialization.DecodeException"}
+         ]"#,
+      )
+      .unwrap();
+      assert!(request_errors(&errors, true).is_empty());
+      assert_eq!(request_errors(&errors, false).len(), 2);
+
+      let whole: Vec<ApiError> =
+         serde_json::from_str(r#"[{"code": 88, "message": "Rate limit exceeded"}]"#).unwrap();
+      assert_eq!(request_errors(&whole, true).len(), 1);
+
+      let denylisted: Vec<ApiError> = serde_json::from_str(
+         r#"[{"code": 0, "message": "QueryDenylistedFailure", "path": ["search_by_raw_query"]}]"#,
+      )
+      .unwrap();
+      assert_eq!(request_errors(&denylisted, true).len(), 1);
    }
 
    #[test]
