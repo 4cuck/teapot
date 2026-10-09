@@ -5,8 +5,10 @@ mod client;
 mod endpoints;
 mod filters;
 pub mod http;
+mod operations;
 mod parser;
 mod proxy_pool;
+mod search_check;
 mod search_denylist;
 pub mod schema;
 mod tid;
@@ -14,5 +16,8 @@ mod tid;
 pub use auth::*;
 pub use client::*;
 pub use http::HttpClient;
-pub use proxy_pool::ProxyPool;
+pub use proxy_pool::{
+   ProxyPool,
+   load_fallback_proxies,
+};
 pub use tid::*;

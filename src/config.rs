@@ -141,6 +141,11 @@ pub struct AppConfig {
    /// `host:port:user:pass` SOCKS5 list used for X API calls.
    #[serde(default, rename = "socksProxiesFile")]
    pub socks_proxies_file:      String,
+   /// Exits used in turn, one per request, only after the direct address
+   /// gets an HTML 429. Lines are `http://user:pass@host:port`,
+   /// `socks5h://user:pass@host:port`, or `host:port:user:pass` (HTTP).
+   #[serde(default, rename = "fallbackProxiesFile")]
+   pub fallback_proxies_file:   String,
    /// session id → SOCKS5 port pins so each account keeps the same exit IP.
    #[serde(default, rename = "sessionProxiesFile")]
    pub session_proxies_file:    String,

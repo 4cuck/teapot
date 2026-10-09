@@ -560,7 +560,7 @@ pub fn api_error_titled(config: &Config, err: &Error, generic: &str) -> Response
    let (status, title, message) = classify_error(err, generic);
 
    if matches!(err, Error::TransientUpstream) {
-      tracing::warn!(error = ?err, "upstream empty");
+      tracing::trace!(error = ?err, "upstream empty");
    } else if status.is_server_error() {
       tracing::error!(error = ?err, "request failed");
    } else if status == StatusCode::TOO_MANY_REQUESTS {

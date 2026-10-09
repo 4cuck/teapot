@@ -31,6 +31,10 @@ use super::{
       Egress,
       HttpClient,
    },
+   operations::{
+      self,
+      Operations,
+   },
 };
 
 /// Cached transaction ID client that refreshes periodically.
@@ -38,10 +42,15 @@ use super::{
 pub struct TidClient {
    inner:      Arc<RwLock<Option<ClientTransaction>>>,
    http:       HttpClient,
+   /// Loads the web client's script chunks from abs.twimg.com.
+   scripts:    HttpClient,
    sessions:   SessionPool,
    proxies:    Option<Arc<ProxyPool>>,
+   operations: Operations,
    last_fetch: Arc<Mutex<Instant>>,
    refused:    Arc<RwLock<HashMap<String, Instant>>>,
+   /// When GraphQL operations were last read again after an empty answer.
+   rechecked:  Arc<Mutex<Option<Instant>>>,
 }
 
 /// How often to refresh the TID client.
@@ -55,17 +64,48 @@ const RETRY_INTERVAL: Duration = Duration::from_mins(5);
 /// starts accepting IDs again.
 const REFUSAL_INTERVAL: Duration = Duration::from_mins(10);
 
+/// Shortest gap between two reads of the operations prompted by empty
+/// answers. A deploy is caught on the first one; the rest are X blips.
+const RECHECK_INTERVAL: Duration = Duration::from_mins(1);
+
 impl TidClient {
-   pub fn new(http: HttpClient, sessions: SessionPool, proxies: Option<Arc<ProxyPool>>) -> Self {
+   pub fn new(
+      http: HttpClient,
+      scripts: HttpClient,
+      sessions: SessionPool,
+      proxies: Option<Arc<ProxyPool>>,
+      operations: Operations,
+   ) -> Self {
       Self {
          inner: Arc::new(RwLock::new(None)),
          http,
+         scripts,
          sessions,
          proxies,
+         operations,
          last_fetch: Arc::new(Mutex::new(
             Instant::now().checked_sub(REFRESH_INTERVAL).unwrap(),
          )),
          refused: Arc::new(RwLock::new(HashMap::new())),
+         rechecked: Arc::new(Mutex::new(None)),
+      }
+   }
+
+   /// Read the GraphQL operations again after two accounts got an empty 404
+   /// for the same call. Callers that arrive during a read wait for it, and
+   /// reads are at least a minute apart.
+   pub async fn recheck_operations(&self) {
+      let mut last = self.rechecked.lock().await;
+      if last.is_some_and(|at| at.elapsed() < RECHECK_INTERVAL) {
+         return;
+      }
+      *last = Some(Instant::now());
+      let outcome = match self.fetch_home().await {
+         Ok((home, egress)) => self.operations.learn(&self.scripts, &egress, &home).await,
+         Err(err) => Err(err),
+      };
+      if let Err(err) = outcome {
+         tracing::warn!("could not read GraphQL operations from X's client: {err}");
       }
    }
 
@@ -98,7 +138,16 @@ impl TidClient {
          .insert(Self::refusal_key(method, path), Instant::now());
    }
 
-   async fn is_refused(&self, method: &str, path: &str) -> bool {
+   /// Forget a refusal once a call with a transaction ID works again.
+   pub async fn clear_refused(&self, method: &str, path: &str) {
+      self
+         .refused
+         .write()
+         .await
+         .remove(&Self::refusal_key(method, path));
+   }
+
+   pub(crate) async fn is_refused(&self, method: &str, path: &str) -> bool {
       let key = Self::refusal_key(method, path);
       let refused_at = self.refused.read().await.get(&key).copied();
       match refused_at {
@@ -175,13 +224,36 @@ impl TidClient {
    }
 
    /// Fetch the x.com homepage and ondemand JS to create a new
-   /// [`ClientTransaction`].
+   /// [`ClientTransaction`]. The GraphQL operations are read from the same
+   /// homepage in the background.
+   async fn fetch_client(&self) -> Result<ClientTransaction, String> {
+      let (home_html, egress) = self.fetch_home().await?;
+
+      let js_url = ClientTransaction::extract_ondemand_url(&home_html)
+         .map_err(|err| format!("extract ondemand URL: {err}"))?;
+      let js_text = operations::fetch_script(&self.scripts, &egress, &js_url).await?;
+
+      let operations = self.operations.clone();
+      let scripts = self.scripts.clone();
+      let home = home_html.clone();
+      let learn_egress = egress.clone();
+      tokio::spawn(async move {
+         if let Err(err) = operations.learn(&scripts, &learn_egress, &home).await {
+            tracing::warn!("could not read GraphQL operations from X's client: {err}");
+         }
+      });
+
+      ClientTransaction::new(&home_html, &js_text)
+         .map_err(|err| format!("create TID client: {err}"))
+   }
+
+   /// Load the logged-in x.com homepage.
    ///
    /// This is a page load, so it carries navigation fetch metadata rather than
    /// the API client's XHR defaults, and it goes out as the browser of the
    /// account whose cookie it uses. Client hints and user agent stay with that
    /// browser profile.
-   async fn fetch_client(&self) -> Result<ClientTransaction, String> {
+   async fn fetch_home(&self) -> Result<(String, Egress), String> {
       let mut headers = HeaderMap::new();
       headers.insert(
          header::ACCEPT,
@@ -235,36 +307,6 @@ impl TidClient {
          .text()
          .await
          .map_err(|err| format!("read x.com body: {err}"))?;
-
-      let js_url = ClientTransaction::extract_ondemand_url(&home_html)
-         .map_err(|err| format!("extract ondemand URL: {err}"))?;
-
-      // The script is a subresource, fetched cross-site from the CDN.
-      headers.remove(header::COOKIE);
-      headers.remove("sec-fetch-user");
-      headers.remove("upgrade-insecure-requests");
-      headers.insert(header::ACCEPT, header::HeaderValue::from_static("*/*"));
-      headers.insert("sec-fetch-dest", header::HeaderValue::from_static("script"));
-      headers.insert("sec-fetch-mode", header::HeaderValue::from_static("no-cors"));
-      headers.insert(
-         "sec-fetch-site",
-         header::HeaderValue::from_static("cross-site"),
-      );
-      headers.insert("priority", header::HeaderValue::from_static("u=1"));
-      headers.insert(
-         header::REFERER,
-         header::HeaderValue::from_static("https://x.com/"),
-      );
-      let js_text = self
-         .http
-         .get_on(&js_url, &headers, Some(&egress))
-         .await
-         .map_err(|err| format!("fetch ondemand JS: {err}"))?
-         .text()
-         .await
-         .map_err(|err| format!("read ondemand JS body: {err}"))?;
-
-      ClientTransaction::new(&home_html, &js_text)
-         .map_err(|err| format!("create TID client: {err}"))
+      Ok((home_html, egress))
    }
 }

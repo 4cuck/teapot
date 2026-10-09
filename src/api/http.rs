@@ -7,9 +7,16 @@
 //! else (media, bootstrap fetches) uses a shared default client.
 
 use std::{
-   collections::HashMap,
+   collections::{
+      HashMap,
+      HashSet,
+   },
    error::Error as _,
    fmt::Write as _,
+   hash::{
+      Hash as _,
+      Hasher as _,
+   },
    pin::Pin,
    result::Result as StdResult,
    sync::{
@@ -17,6 +24,7 @@ use std::{
       Mutex,
       atomic::{
          AtomicU64,
+         AtomicUsize,
          Ordering,
       },
    },
@@ -66,9 +74,9 @@ const POOL_IDLE: Duration = Duration::from_secs(300);
 const POOL_PER_HOST: usize = 4;
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(45);
 const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(15);
-/// After an HTML 429, skip the direct IP this long and use the residential
-/// proxy immediately so the next requests do not wait on another block page.
-const DIRECT_BLOCK_FOR: Duration = Duration::from_secs(30);
+/// After an HTML 429, skip the direct address this long and send every
+/// request through the fallback exits.
+const DIRECT_BLOCK_FOR: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProxyKind {
@@ -133,14 +141,32 @@ pub enum Purpose {
    Api,
    /// Images and video pulled from X's CDN by a page.
    Media,
+   /// The web client's own script chunks, loaded by x.com from abs.twimg.com.
+   Script,
 }
 
 impl Purpose {
    const fn timeout(self) -> Duration {
       match self {
          Self::Api => REQUEST_TIMEOUT,
-         Self::Media => MEDIA_TIMEOUT,
+         Self::Media | Self::Script => MEDIA_TIMEOUT,
       }
+   }
+}
+
+/// Proxy exits used in turn, one per request, after the direct address is
+/// blocked.
+struct FallbackPool {
+   proxies: Vec<ProxyConfig>,
+   /// [`proxy_tag`] of every exit, to recognise them when picking a client.
+   tags:    HashSet<u64>,
+   next:    AtomicUsize,
+}
+
+impl FallbackPool {
+   fn next(&self) -> ProxyConfig {
+      let index = self.next.fetch_add(1, Ordering::Relaxed);
+      self.proxies[index % self.proxies.len()].clone()
    }
 }
 
@@ -157,6 +183,8 @@ pub struct HttpClient {
    /// Used only after the direct exit returns an HTML 429, or while that
    /// block is still fresh.
    fallback_proxy: Option<ProxyConfig>,
+   /// Round-robin exits for the same window. Each call takes the next one.
+   fallback_pool:  Option<Arc<FallbackPool>>,
    /// Unix millis until which the direct exit is skipped.
    direct_blocked_until: Arc<AtomicU64>,
    extra_headers:  HeaderMap,
@@ -198,6 +226,7 @@ impl HttpClient {
          default,
          default_proxy,
          fallback_proxy: None,
+         fallback_pool: None,
          direct_blocked_until: Arc::new(AtomicU64::new(0)),
          extra_headers,
          sessions: Arc::new(Mutex::new(HashMap::new())),
@@ -217,6 +246,35 @@ impl HttpClient {
          self.fallback_proxy = Some(proxy);
       }
       self
+   }
+
+   /// Exits used, one after another, while the direct address is blocked.
+   #[must_use]
+   pub fn with_fallback_proxies(mut self, proxies: Vec<ProxyConfig>) -> Self {
+      if !proxies.is_empty() {
+         tracing::info!(
+            proxies = proxies.len(),
+            "proxy exits are the fallback for HTML 429s"
+         );
+         let tags = proxies.iter().map(|proxy| proxy_tag(Some(proxy))).collect();
+         self.fallback_pool = Some(Arc::new(FallbackPool {
+            proxies,
+            tags,
+            next: AtomicUsize::new(0),
+         }));
+      }
+      self
+   }
+
+   fn has_fallback(&self) -> bool {
+      self.fallback_proxy.is_some() || self.fallback_pool.is_some()
+   }
+
+   fn take_fallback(&self) -> Option<ProxyConfig> {
+      if let Some(pool) = &self.fallback_pool {
+         return Some(pool.next());
+      }
+      self.fallback_proxy.clone()
    }
 
    /// Headers added to every request this client makes.
@@ -250,11 +308,27 @@ impl HttpClient {
 
    /// The client for an account, built on first use and kept for the life of
    /// the process, so its connections and fingerprint persist.
+   ///
+   /// A request through the round-robin pool lands on a different exit each
+   /// time, so those clients belong to the browser rather than the account:
+   /// every account presenting that browser shares them. Kept per account,
+   /// each one would gather a client per exit and reuse almost none.
    fn client_for(&self, via: Option<&Egress>) -> Result<primp::Client> {
       let Some(egress) = via else {
          return Ok(self.default.clone());
       };
-      let key = (egress.session, proxy_tag(egress.proxy.as_ref()));
+      let identity = browser::identity_for(egress.session);
+      let tag = proxy_tag(egress.proxy.as_ref());
+      let pooled = self
+         .fallback_pool
+         .as_ref()
+         .is_some_and(|pool| pool.tags.contains(&tag));
+      let owner = if pooled {
+         identity_owner(identity)
+      } else {
+         egress.session
+      };
+      let key = (owner, tag);
       if let Some(client) = self
          .sessions
          .lock()
@@ -263,7 +337,6 @@ impl HttpClient {
       {
          return Ok(client);
       }
-      let identity = browser::identity_for(egress.session);
       let idle = if self.is_fallback(egress.proxy.as_ref()) {
          // A new connection asks the residential proxy for a new exit IP.
          0
@@ -368,12 +441,12 @@ impl HttpClient {
       via: Option<&Egress>,
    ) -> Result<Response> {
       let direct = via.is_some_and(|egress| egress.proxy.is_none());
-      let skip_direct = direct && self.fallback_proxy.is_some() && self.direct_is_blocked();
+      let skip_direct = direct && self.has_fallback() && self.direct_is_blocked();
       let proxied;
       let first_via = if skip_direct {
          proxied = Egress {
             session: via.expect("direct egress").session,
-            proxy:   self.fallback_proxy.clone(),
+            proxy:   self.take_fallback(),
          };
          Some(&proxied)
       } else {
@@ -383,8 +456,8 @@ impl HttpClient {
       let first = self
          .dispatch(&method, uri, extra_headers, &body, first_via)
          .await;
-      // Already on a proxy, or this client has no residential fallback.
-      if !direct || self.fallback_proxy.is_none() || skip_direct {
+      // Already on a proxy, or this client has no fallback exits.
+      if !direct || !self.has_fallback() || skip_direct {
          return first;
       }
       let blocked = match &first {
@@ -398,10 +471,10 @@ impl HttpClient {
       if matches!(&first, Ok(response) if is_edge_block(response.status(), response.headers())) {
          self.block_direct();
       }
-      tracing::warn!(uri, "direct exit blocked, retrying through the residential proxy");
+      tracing::warn!(uri, "direct exit blocked, retrying through a fallback proxy");
       let proxied = Egress {
          session: via.expect("direct egress").session,
-         proxy:   self.fallback_proxy.clone(),
+         proxy:   self.take_fallback(),
       };
       self
          .dispatch(&method, uri, extra_headers, &body, Some(&proxied))
@@ -450,12 +523,13 @@ fn default_identity() -> Identity {
    }
 }
 
-/// Header order from a logged-in Chrome 152 session on x.com.
+/// Header order from logged-in Chrome 152 sessions on x.com.
 ///
 /// Names that a given request does not send are skipped, so a GraphQL GET
 /// stays in the order of those calls and an image or video fetch stays in
-/// the order of the CDN calls. `x-twitter-polling` and `origin` sit where the
-/// few requests that send them placed them.
+/// the order of the CDN calls. A SearchTimeline GET sends this API order and
+/// does not send `x-twitter-polling` or `origin`; those names stay in the
+/// list for the calls that do.
 fn wire_header_order(purpose: Purpose) -> Vec<HeaderName> {
    let names: &[&str] = match purpose {
       Purpose::Api => {
@@ -505,6 +579,26 @@ fn wire_header_order(purpose: Purpose) -> Vec<HeaderName> {
             "accept-language",
             "range",
             "if-range",
+            "cookie",
+            "priority",
+         ]
+      },
+      Purpose::Script => {
+         &[
+            "sec-gpc",
+            "origin",
+            "sec-ch-ua-platform",
+            "user-agent",
+            "sec-ch-ua",
+            "dnt",
+            "sec-ch-ua-mobile",
+            "accept",
+            "sec-fetch-site",
+            "sec-fetch-mode",
+            "sec-fetch-dest",
+            "referer",
+            "accept-encoding",
+            "accept-language",
             "cookie",
             "priority",
          ]
@@ -570,30 +664,48 @@ fn shape_headers(headers: &mut HeaderMap, purpose: Purpose, extra: &HeaderMap) {
    headers.remove("sec-fetch-user");
 
    let (accept, dest, mode, site, priority) = match purpose {
-      Purpose::Api => ("*/*", "empty", "cors", "same-origin", "u=1, i"),
+      Purpose::Api => ("*/*", "empty", "cors", "same-origin", Some("u=1, i")),
       Purpose::Media => {
          (
             "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
             "image",
             "no-cors",
             "cross-site",
-            "u=1, i",
+            Some("u=1, i"),
          )
       },
+      // A chunk webpack loads on demand carries no priority.
+      Purpose::Script => ("*/*", "script", "cors", "cross-site", None),
    };
    for (name, value) in [
       (header::ACCEPT, accept),
       (header::HeaderName::from_static("sec-fetch-dest"), dest),
       (header::HeaderName::from_static("sec-fetch-mode"), mode),
       (header::HeaderName::from_static("sec-fetch-site"), site),
-      (header::HeaderName::from_static("priority"), priority),
    ] {
       if headers.contains_key(&name) {
          headers.insert(name, HeaderValue::from_static(value));
       }
    }
-   if purpose == Purpose::Api {
-      headers.insert(header::REFERER, HeaderValue::from_static("https://x.com/"));
+   let priority_name = header::HeaderName::from_static("priority");
+   match priority {
+      Some(value) if headers.contains_key(&priority_name) => {
+         headers.insert(priority_name, HeaderValue::from_static(value));
+      },
+      Some(_) => {},
+      None => {
+         headers.remove(&priority_name);
+      },
+   }
+   match purpose {
+      Purpose::Api => {
+         headers.insert(header::REFERER, HeaderValue::from_static("https://x.com/"));
+      },
+      Purpose::Script => {
+         headers.insert(header::ORIGIN, HeaderValue::from_static("https://x.com"));
+         headers.insert(header::REFERER, HeaderValue::from_static("https://x.com/"));
+      },
+      Purpose::Media => {},
    }
    for (name, value) in extra {
       headers.insert(name.clone(), value.clone());
@@ -630,6 +742,14 @@ fn is_direct_failure(err: &Error) -> bool {
       || message.contains("error sending request")
       || message.contains("connection")
       || message.contains("broken pipe")
+}
+
+/// Client-cache owner for a browser rather than an account. Session ids are
+/// positive, so browsers take negative keys.
+fn identity_owner(identity: Identity) -> i64 {
+   let mut hasher = std::collections::hash_map::DefaultHasher::new();
+   identity.to_string().hash(&mut hasher);
+   -1 - (hasher.finish() >> 1).cast_signed()
 }
 
 fn proxy_tag(proxy: Option<&ProxyConfig>) -> u64 {
@@ -786,8 +906,52 @@ impl http_body::Body for StreamingBody {
 }
 
 #[cfg(test)]
+fn proxy_on(port: u16) -> ProxyConfig {
+   ProxyConfig {
+      host:     "proxy.example".into(),
+      port,
+      kind:     ProxyKind::Socks5,
+      username: None,
+      password: None,
+   }
+}
+
+#[cfg(test)]
 mod tests {
    use super::*;
+
+   #[test]
+   fn fallback_pool_uses_a_different_exit_each_call() {
+      let proxies = vec![proxy_on(10001), proxy_on(10002), proxy_on(10003)];
+      let pool = FallbackPool {
+         tags: proxies.iter().map(|proxy| proxy_tag(Some(proxy))).collect(),
+         proxies,
+         next: AtomicUsize::new(0),
+      };
+      let ports: Vec<u16> = (0..5).map(|_| pool.next().port).collect();
+      assert_eq!(ports, vec![10001, 10002, 10003, 10001, 10002]);
+   }
+
+   #[test]
+   fn pool_exit_clients_are_shared_per_browser() {
+      let client = HttpClient::new("", "", Purpose::Api)
+         .with_fallback_proxies(vec![proxy_on(10001), proxy_on(10002)]);
+      for session in 1..=60 {
+         for _ in 0..2 {
+            let egress = Egress {
+               session,
+               proxy: client.take_fallback(),
+            };
+            client.client_for(Some(&egress)).unwrap();
+         }
+      }
+      let browsers: HashSet<String> = (1..=60)
+         .map(|session| browser::identity_for(session).to_string())
+         .collect();
+      let cached = client.sessions.lock().unwrap().len();
+      assert!(cached <= browsers.len() * 2, "{cached} clients for {} browsers", browsers.len());
+      assert!(identity_owner(browser::identity_for(1)) < 0);
+   }
 
    #[test]
    fn socks_proxy_url_carries_credentials() {
@@ -909,6 +1073,28 @@ mod tests {
       assert!(headers.get("sec-fetch-user").is_none());
       assert_eq!(headers.get("sec-ch-ua").unwrap(), "\"Chromium\";v=\"151\"");
       assert_eq!(headers.get(header::REFERER).unwrap(), "https://x.com/");
+   }
+
+   #[test]
+   fn script_headers_match_a_chrome_chunk_load() {
+      let mut headers = HeaderMap::new();
+      headers.insert(header::ACCEPT, HeaderValue::from_static("text/html"));
+      headers.insert("sec-fetch-mode", HeaderValue::from_static("navigate"));
+      headers.insert("sec-fetch-dest", HeaderValue::from_static("document"));
+      headers.insert("sec-fetch-site", HeaderValue::from_static("none"));
+      headers.insert("priority", HeaderValue::from_static("u=0, i"));
+      shape_headers(&mut headers, Purpose::Script, &HeaderMap::new());
+      assert_eq!(headers.get(header::ACCEPT).unwrap(), "*/*");
+      assert_eq!(headers.get("sec-fetch-mode").unwrap(), "cors");
+      assert_eq!(headers.get("sec-fetch-dest").unwrap(), "script");
+      assert_eq!(headers.get("sec-fetch-site").unwrap(), "cross-site");
+      assert_eq!(headers.get(header::ORIGIN).unwrap(), "https://x.com");
+      assert_eq!(headers.get(header::REFERER).unwrap(), "https://x.com/");
+      assert!(headers.get("priority").is_none());
+
+      let order = wire_header_order(Purpose::Script);
+      let names: Vec<&str> = order.iter().map(HeaderName::as_str).collect();
+      assert_eq!(&names[..3], &["sec-gpc", "origin", "sec-ch-ua-platform"]);
    }
 
    #[test]

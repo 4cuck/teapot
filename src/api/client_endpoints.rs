@@ -623,7 +623,7 @@ impl ApiClient {
          .graphql_request::<SearchTimelineData>(
             endpoints::GRAPH_SEARCH_TIMELINE,
             &endpoints::search_vars(query, cursor, product),
-            endpoints::GQL_FEATURES,
+            endpoints::SEARCH_FEATURES,
             None,
          )
          .await?;
@@ -679,7 +679,7 @@ impl ApiClient {
          .graphql_request::<SearchTimelineData>(
             endpoints::GRAPH_SEARCH_TIMELINE,
             &endpoints::search_vars(query, cursor, "People"),
-            endpoints::GQL_FEATURES,
+            endpoints::SEARCH_FEATURES,
             None,
          )
          .await?;

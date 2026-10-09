@@ -261,7 +261,9 @@ impl IntoResponse for Error {
    fn into_response(self) -> Response {
       let (status, _, msg) = self.presentation();
 
-      if status.is_server_error() {
+      if matches!(self, Error::TransientUpstream) {
+         tracing::trace!(error = ?self, "upstream empty");
+      } else if status.is_server_error() {
          tracing::error!(error = ?self, "request failed");
       }
 

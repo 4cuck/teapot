@@ -124,9 +124,12 @@ async fn main() -> eyre::Result<()> {
    // every session client built from here on presents one X will talk to.
    api::browser::probe_accepted(proxies.as_ref().map(ProxyPool::first)).await;
 
+   let fallback_proxies = api::load_fallback_proxies(&config.config.fallback_proxies_file).await?;
+
    // Initialize API client
-   let api = ApiClient::new(&config, sessions, proxies);
+   let api = ApiClient::new(&config, sessions, proxies, fallback_proxies);
    api.spawn_filter_sync();
+   api.spawn_search_check();
 
    // Initialize GIF transcoder if local mode
    let http_client = HttpClient::new(

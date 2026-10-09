@@ -8,14 +8,7 @@ use axum::{
       RawQuery,
       State,
    },
-   http::{
-      StatusCode,
-      header::{
-         CACHE_CONTROL,
-         CONTENT_TYPE,
-         REFRESH,
-      },
-   },
+   http::header::CONTENT_TYPE,
    response::{
       Html,
       IntoResponse as _,
@@ -25,7 +18,6 @@ use axum::{
    routing::get,
 };
 use axum_extra::extract::CookieJar;
-use maud::html;
 use serde::Deserialize;
 
 use super::helpers;
@@ -36,10 +28,7 @@ use crate::{
       ttl,
    },
    config::Config,
-   error::{
-      Error,
-      Result,
-   },
+   error::Result,
    types::{
       PaginatedResult,
       Prefs,
@@ -108,9 +97,6 @@ pub struct SearchQuery {
    pub e_replies:  Option<String>,
    #[serde(rename = "e-retweets")]
    pub e_retweets: Option<String>,
-   /// Browser auto-retry count after an empty SearchTimeline 404.
-   #[serde(default)]
-   pub retry:      u8,
    /// AJAX infinite-scroll request — return a timeline fragment, not a page.
    pub scroll:     Option<String>,
 }
@@ -207,23 +193,6 @@ impl SearchQuery {
    }
 }
 
-const SEARCH_AUTO_RETRIES: u8 = 2;
-const SEARCH_RETRY_WAIT_SECS: u8 = 2;
-
-fn with_retry_param(raw_qs: &str, retry: u8) -> String {
-   let rest = raw_qs
-      .split('&')
-      .filter(|pair| {
-         !pair.is_empty() && !pair.starts_with("retry=") && !pair.starts_with("scroll=")
-      })
-      .collect::<Vec<_>>();
-   if rest.is_empty() {
-      format!("/search?retry={retry}")
-   } else {
-      format!("/search?{}&retry={retry}", rest.join("&"))
-   }
-}
-
 fn is_scroll_request(params: &SearchQuery) -> bool {
    params.scroll.as_deref() == Some("true")
 }
@@ -238,59 +207,9 @@ fn search_tab(params: &SearchQuery) -> &'static str {
    }
 }
 
-fn search_error(
-   config: &Config,
-   prefs: &Prefs,
-   raw_qs: Option<&str>,
-   params: &SearchQuery,
-   err: &Error,
-) -> Response {
-   if is_scroll_request(params) {
-      // A 200 "Trying again…" page looks like success to infiniteScroll.js,
-      // which then drops the Load more sentinel and cannot page further.
-      return helpers::api_error_titled(config, err, "Search Error");
-   }
-   search_upstream_error(config, prefs, raw_qs, params.retry, err)
-}
-
-fn search_upstream_error(
-   config: &Config,
-   prefs: &Prefs,
-   raw_qs: Option<&str>,
-   attempt: u8,
-   err: &Error,
-) -> Response {
-   if matches!(err, Error::TransientUpstream) && attempt < SEARCH_AUTO_RETRIES {
-      let url = with_retry_param(raw_qs.unwrap_or(""), attempt + 1);
-      let wait = SEARCH_RETRY_WAIT_SECS;
-      tracing::warn!(attempt, %url, "search empty, auto-retrying in the browser");
-      let refresh = html! {
-          meta http-equiv="refresh" content=(format!("{wait};url={url}"));
-      };
-      let content = html! {
-          div class="panel-container" {
-              div class="error-panel" {
-                  span { "X did not return a result. Trying again…" }
-                  " "
-                  a href=(&url) { "Retry now" }
-              }
-          }
-      };
-      let markup = layout::PageLayout::new(config, "Try again", content)
-         .prefs(prefs)
-         .head_extra(&refresh)
-         .description("X did not return a result. Trying again…")
-         .render();
-      return (
-         StatusCode::OK,
-         [
-            (REFRESH, format!("{wait};url={url}")),
-            (CACHE_CONTROL, "no-store".to_owned()),
-         ],
-         Html(markup.into_string()),
-      )
-         .into_response();
-   }
+fn search_error(config: &Config, err: &crate::error::Error) -> Response {
+   // One upstream call already ran. A refresh page would send that same
+   // search to X again.
    helpers::api_error_titled(config, err, "Search Error")
 }
 
@@ -459,13 +378,7 @@ async fn search(
             Ok(Html(markup.into_string()).into_response())
          },
          Err(err) => {
-            Ok(search_error(
-               &state.config,
-               &prefs,
-               raw_qs.as_deref(),
-               &params,
-               &err,
-            ))
+            Ok(search_error(&state.config, &err))
          },
       }
    } else if active_tab == "users" {
@@ -540,13 +453,7 @@ async fn search(
             Ok(Html(markup.into_string()).into_response())
          },
          Err(err) => {
-            Ok(search_error(
-               &state.config,
-               &prefs,
-               raw_qs.as_deref(),
-               &params,
-               &err,
-            ))
+            Ok(search_error(&state.config, &err))
          },
       }
    } else {
@@ -652,13 +559,7 @@ async fn search(
             Ok(Html(markup.into_string()).into_response())
          },
          Err(err) => {
-            Ok(search_error(
-               &state.config,
-               &prefs,
-               raw_qs.as_deref(),
-               &params,
-               &err,
-            ))
+            Ok(search_error(&state.config, &err))
          },
       }
    }

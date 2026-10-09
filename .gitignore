@@ -35,6 +35,7 @@ config/teapot.toml
 sessions.jsonl
 session-limits.json
 search-denylist.json
+graphql-ops.json
 
 # Documented dummy list only — never a real vendor file
 !proxies.example.txt

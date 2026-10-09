@@ -20,8 +20,10 @@ use super::{
    http::{
       Egress,
       HttpClient,
+      ProxyConfig,
       Purpose,
    },
+   operations::Operations,
    parser,
 };
 use crate::{
@@ -72,9 +74,9 @@ use crate::{
 
 /// A search spends a `SearchTimeline` call and is never served from cache.
 const SEARCH_COST: f64 = 2.0;
-/// First try plus this many replacements for a locked session or empty 404.
-/// Each attempt spends SearchTimeline quota (50/15m per account), so this
-/// must stay small.
+/// First try plus this many replacements when the account itself is rejected
+/// or out of quota. An empty answer gets one other account, since X refuses
+/// some accounts an operation it serves to the rest.
 const GRAPHQL_REPLACEMENTS: usize = 2;
 /// Per-account 429 (JSON / `x-rate-limit-*`). HTML 429s are the WAF and must
 /// not walk the pool — that used to zero every cookie for 15 minutes.
@@ -288,6 +290,7 @@ pub struct ApiClient {
    pub(crate) sessions: SessionPool,
    proxies:             Option<Arc<ProxyPool>>,
    tid:                 TidClient,
+   operations:          Operations,
    budget:              ClientBudget,
    tid_enabled:         bool,
    denylist:            super::search_denylist::SearchDenylist,
@@ -296,7 +299,12 @@ pub struct ApiClient {
 impl ApiClient {
    /// Identity headers (user agent, client hints, languages, encodings) come
    /// from each session's browser profile, so none are set here.
-   pub fn new(config: &Config, sessions: SessionPool, proxies: Option<ProxyPool>) -> Self {
+   pub fn new(
+      config: &Config,
+      sessions: SessionPool,
+      proxies: Option<ProxyPool>,
+      fallback_proxies: Vec<ProxyConfig>,
+   ) -> Self {
       // Direct first, on the server's own address. apiProxy is only the
       // residential exit used after an HTML 429.
       let mut client = HttpClient::new("", "", Purpose::Api);
@@ -305,9 +313,19 @@ impl ApiClient {
       } else if let Some(ref pool) = proxies {
          client = client.with_default_proxy(pool.first());
       }
+      if !fallback_proxies.is_empty() {
+         client = client.with_fallback_proxies(fallback_proxies);
+      }
 
       let proxies = proxies.map(Arc::new);
-      let tid = TidClient::new(client.clone(), sessions.clone(), proxies.clone());
+      let operations = Operations::load();
+      let tid = TidClient::new(
+         client.clone(),
+         HttpClient::new("", "", Purpose::Script),
+         sessions.clone(),
+         proxies.clone(),
+         operations.clone(),
+      );
 
       let denylist_path = std::env::var("TEAPOT_SEARCH_DENYLIST")
          .unwrap_or_else(|_| "search-denylist.json".to_owned());
@@ -317,6 +335,7 @@ impl ApiClient {
          sessions,
          proxies,
          tid,
+         operations,
          budget: ClientBudget::new(config.config.client_budget),
          tid_enabled: !config.config.disable_tid,
          denylist: super::search_denylist::SearchDenylist::load(denylist_path),
@@ -468,10 +487,10 @@ impl ApiClient {
 
       for replacement in 0..GRAPHQL_REPLACEMENTS {
          let session_id = session.id;
+         let empty = matches!(last, Err(Error::TransientUpstream));
          let retry = match &last {
-            Err(Error::SessionRejected(_))
-            | Err(Error::NotFound(_))
-            | Err(Error::TransientUpstream) => true,
+            Err(Error::SessionRejected(_)) => true,
+            Err(Error::TransientUpstream) => replacement == 0 && session.kind == SessionKind::Cookie,
             Err(Error::RateLimited) if replacement < RATE_LIMIT_REPLACEMENTS => {
                self
                   .sessions
@@ -481,14 +500,16 @@ impl ApiClient {
             _ => false,
          };
          if !retry {
-            return last;
+            break;
          }
 
-         tracing::warn!(
-            session_id,
-            endpoint,
-            "session unusable, retrying on another"
-         );
+         if !empty {
+            tracing::warn!(
+               session_id,
+               endpoint,
+               "session unusable, retrying on another"
+            );
+         }
          drop(session);
          self.charge(endpoint).await?;
          session = match self
@@ -505,6 +526,36 @@ impl ApiClient {
          last = self
             .graphql_request_inner(&session, endpoint, variables, features, field_toggles)
             .await;
+         if empty && last.is_ok() {
+            tracing::info!(
+               session_id,
+               endpoint,
+               "X answers this account nothing for this operation while others get results; leaving it out for a day"
+            );
+            self.sessions.mark_refused(session_id, endpoint).await;
+         }
+      }
+
+      // Two accounts got nothing: X is answering nobody, or this query id is
+      // one it has retired. Read the live ids and resend once if it moved.
+      if session.kind == SessionKind::Cookie && matches!(last, Err(Error::TransientUpstream)) {
+         let before = self.wire_operation(&session, endpoint, features).await.0;
+         self.tid.recheck_operations().await;
+         let after = self.wire_operation(&session, endpoint, features).await.0;
+         if after != before {
+            tracing::info!(
+               from = %before,
+               to = %after,
+               "X answered nothing for a retired query id; sending under the new one"
+            );
+            last = self
+               .graphql_request_inner(&session, endpoint, variables, features, field_toggles)
+               .await;
+         }
+      }
+
+      if last.is_ok() {
+         self.sessions.mark_verified(session.id, endpoint).await;
       }
       last
    }
@@ -591,10 +642,13 @@ impl ApiClient {
    /// Inner implementation of [`graphql_request`].
    ///
    /// A bodyless 404 is how X refuses a client transaction ID it will not
-   /// accept, and it answers the same request without one, so the ID is
-   /// dropped and the call repeated on this session before the caller burns a
-   /// second account on it.
-   async fn graphql_request_inner<T>(
+   /// accept, and it answers the same request without one, so the call is
+   /// repeated on this session the other way before the caller burns a second
+   /// account on it. The refusal is kept only when the call then works without
+   /// an ID, and dropped when it works with one again, so an empty answer
+   /// that has nothing to do with the ID cannot pin a path to one form.
+   ///
+   pub(super) async fn graphql_request_inner<T>(
       &self,
       session: &SessionLease,
       endpoint: &str,
@@ -606,42 +660,70 @@ impl ApiClient {
       T: DeserializeOwned,
    {
       let sent_tid = self.tid_enabled && session.kind == SessionKind::Cookie;
-      let first = self
-         .graphql_attempt(session, endpoint, variables, features, field_toggles, true)
+      let wire = self.wire_operation(session, endpoint, features).await;
+      let path = format!("/i/api/graphql/{}", wire.0);
+      let refused = sent_tid && self.tid.is_refused("GET", &path).await;
+      let mut result = self
+         .graphql_attempt(session, endpoint, &wire, variables, field_toggles, !refused)
          .await;
-      if !sent_tid || !matches!(first, Err(Error::TransientUpstream)) {
-         return first;
+
+      if sent_tid && matches!(result, Err(Error::TransientUpstream)) {
+         if refused {
+            self.tid.clear_refused("GET", &path).await;
+         }
+         result = self
+            .graphql_attempt(session, endpoint, &wire, variables, field_toggles, refused)
+            .await;
+         if result.is_ok() && !refused {
+            self.tid.note_refused("GET", &path).await;
+         }
+         if let Err(ref err) = result
+            && !matches!(err, Error::TransientUpstream)
+         {
+            tracing::warn!(
+               session_id = session.id,
+               endpoint,
+               "no answer from X with or without a transaction id: {err}"
+            );
+         }
       }
 
-      self
-         .tid
-         .note_refused("GET", &format!("/i/api/graphql/{endpoint}"))
-         .await;
-      let retried = self
-         .graphql_attempt(session, endpoint, variables, features, field_toggles, false)
-         .await;
-      if let Err(ref err) = retried {
-         tracing::warn!(
-            session_id = session.id,
-            endpoint,
-            "no answer from X with or without a transaction id: {err}"
-         );
-      }
-      retried
+      result
    }
 
+   /// The `id/Name` path and features to send for `endpoint`. A cookie
+   /// session is the web client, so it sends the web client's current id and
+   /// features once they have been read; until then, and for OAuth sessions,
+   /// the compiled ones go out.
+   async fn wire_operation(
+      &self,
+      session: &SessionLease,
+      endpoint: &str,
+      features: &str,
+   ) -> (String, String) {
+      if session.kind == SessionKind::Cookie
+         && let Some(live) = self.operations.resolve(endpoint).await
+      {
+         return live;
+      }
+      (endpoint.to_owned(), features.to_owned())
+   }
+
+   /// One request. `endpoint` keys the session's rate-limit bookkeeping and
+   /// stays the compiled name; `wire` is what goes in the URL.
    async fn graphql_attempt<T>(
       &self,
       session: &SessionLease,
       endpoint: &str,
+      wire: &(String, String),
       variables: &str,
-      features: &str,
       field_toggles: Option<&str>,
       with_tid: bool,
    ) -> Result<T>
    where
       T: DeserializeOwned,
    {
+      let (path, features) = (wire.0.as_str(), wire.1.as_str());
       let base_url = match session.kind {
          SessionKind::OAuth => endpoints::API_URL,
          SessionKind::Cookie => endpoints::GRAPHQL_URL,
@@ -655,13 +737,13 @@ impl ApiClient {
          if let Some(toggles) = field_toggles {
             qs.append_pair("fieldToggles", toggles);
          }
-         format!("{base_url}/{endpoint}?{}", qs.finish())
+         format!("{base_url}/{path}?{}", qs.finish())
       };
       let headers = self
          .graphql_headers(
             session,
             base_url,
-            endpoint,
+            path,
             variables,
             features,
             field_toggles,
@@ -808,7 +890,7 @@ impl ApiClient {
          // JSON 404s can still be a real gone resource.
          if status.as_u16() == 404 {
             if body.trim().is_empty() || serde_json::from_str::<serde_json::Value>(&body).is_err() {
-               tracing::debug!(
+               tracing::trace!(
                   session_id = session.id,
                   session_user = %session.username,
                   endpoint,
@@ -927,6 +1009,11 @@ impl ApiClient {
                && let Ok(val) = tid.parse()
             {
                headers.insert("x-client-transaction-id", val);
+            }
+            if let Some(referer) = endpoints::search_referer(endpoint, variables)
+               && let Ok(val) = header::HeaderValue::from_str(&referer)
+            {
+               headers.insert(header::REFERER, val);
             }
          },
       }

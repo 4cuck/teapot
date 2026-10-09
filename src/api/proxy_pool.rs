@@ -173,6 +173,142 @@ impl ProxyPool {
    }
 }
 
+/// A gateway slower than this is not used. The proxy hostname has several
+/// addresses and a slow one adds the wait the fallback is meant to avoid.
+const GATEWAY_MAX_MS: f64 = 20.0;
+
+/// Load the fallback proxy list and point every exit at a gateway that
+/// answered within [`GATEWAY_MAX_MS`]. Each line's scheme picks the tunnel:
+/// `socks5h://` is SOCKS5, `http://` and bare `host:port:user:pass` lines are
+/// HTTP CONNECT. With no gateway that fast the fallback stays off rather than
+/// keeping teapot from starting.
+pub async fn load_fallback_proxies(path: &str) -> Result<Vec<ProxyConfig>> {
+   let path = path.trim();
+   if path.is_empty() {
+      return Ok(Vec::new());
+   }
+   let content = fs::read_to_string(path).await.map_err(|err| {
+      Error::InvalidConfig(format!("fallbackProxiesFile {path:?} unreadable: {err}"))
+   })?;
+   let mut parsed = Vec::new();
+   for (idx, line) in content.lines().enumerate() {
+      let line = line.trim();
+      if line.is_empty() || line.starts_with('#') {
+         continue;
+      }
+      let Some(entry) = parse_fallback_line(line) else {
+         return Err(Error::InvalidConfig(format!(
+            "fallbackProxiesFile line {}: expected scheme://user:pass@host:port or host:port:user:pass",
+            idx + 1
+         )));
+      };
+      parsed.push(entry);
+   }
+   if parsed.is_empty() {
+      return Ok(Vec::new());
+   }
+   let hostname = parsed[0].host.clone();
+   if parsed.iter().any(|entry| entry.host != hostname) {
+      return Err(Error::InvalidConfig(
+         "fallbackProxiesFile mixes proxy hosts; use one gateway hostname".into(),
+      ));
+   }
+   let Some(gateway) = pick_gateway(&hostname, parsed[0].port).await else {
+      tracing::warn!(
+         host = %hostname,
+         "no fallback proxy gateway answered within {GATEWAY_MAX_MS:.0} ms; running without the fallback"
+      );
+      return Ok(Vec::new());
+   };
+   let proxies = parsed
+      .into_iter()
+      .map(|entry| {
+         ProxyConfig {
+            host: gateway.clone(),
+            ..entry
+         }
+      })
+      .collect::<Vec<_>>();
+   tracing::info!(
+      host = %hostname,
+      gateway = %gateway,
+      proxies = proxies.len(),
+      "fallback proxy pool ready"
+   );
+   Ok(proxies)
+}
+
+fn parse_fallback_line(line: &str) -> Option<ProxyConfig> {
+   let schemes = [
+      ("socks5h://", ProxyKind::Socks5),
+      ("socks5://", ProxyKind::Socks5),
+      ("http://", ProxyKind::Http),
+   ];
+   let (kind, (host, port, username, password)) = match schemes
+      .iter()
+      .find_map(|(scheme, kind)| Some((*kind, line.strip_prefix(scheme)?)))
+   {
+      Some((kind, rest)) => {
+         let (userinfo, hostport) = rest.rsplit_once('@')?;
+         let (username, password) = userinfo.split_once(':')?;
+         let (host, port) = hostport.rsplit_once(':')?;
+         let port: u16 = port.parse().ok()?;
+         if host.is_empty() || username.is_empty() || password.is_empty() || port == 0 {
+            return None;
+         }
+         (kind, (host.to_owned(), port, username.to_owned(), password.to_owned()))
+      },
+      None => (ProxyKind::Http, parse_proxy_line(line)?),
+   };
+   Some(ProxyConfig {
+      host,
+      port,
+      kind,
+      username: Some(username),
+      password: Some(password),
+   })
+}
+
+/// The gateway address to use: `hostname` itself when it is an IP, or the
+/// fastest of its A records, as long as it answers within [`GATEWAY_MAX_MS`].
+async fn pick_gateway(hostname: &str, probe_port: u16) -> Option<String> {
+   let ips: Vec<IpAddr> = if let Ok(ip) = hostname.parse::<IpAddr>() {
+      vec![ip]
+   } else {
+      let lookup = format!("{hostname}:{probe_port}");
+      let mut ips: Vec<IpAddr> = match lookup_host(&lookup).await {
+         Ok(addrs) => addrs.map(|addr| addr.ip()).collect(),
+         Err(err) => {
+            tracing::warn!("fallback proxy DNS for {hostname} failed: {err}");
+            return None;
+         },
+      };
+      ips.sort();
+      ips.dedup();
+      ips
+   };
+   let mut probes = JoinSet::new();
+   for ip in ips {
+      probes.spawn(async move { (ip, probe_ip(ip, probe_port).await) });
+   }
+   let mut best: Option<(IpAddr, f64)> = None;
+   while let Some(joined) = probes.join_next().await {
+      let Ok((ip, rtt)) = joined else {
+         continue;
+      };
+      tracing::info!(%ip, rtt_ms = ?rtt, "fallback proxy gateway probe");
+      let Some(ms) = rtt.filter(|ms| *ms <= GATEWAY_MAX_MS) else {
+         continue;
+      };
+      if best.is_none_or(|(_, best_ms)| ms < best_ms) {
+         best = Some((ip, ms));
+      }
+   }
+   let (ip, ms) = best?;
+   tracing::info!(%ip, rtt_ms = ms, "fallback proxy using gateway");
+   Some(ip.to_string())
+}
+
 fn session_proxies_path(config: &Config) -> String {
    let path = config.config.session_proxies_file.trim();
    if path.is_empty() {

@@ -330,7 +330,9 @@ impl SessionPool {
             && limits
                .get(&slot.credentials.id)
                .is_none_or(|session_limits| {
-                  !session_limits.rejected && !session_limits.is_limited(api)
+                  !session_limits.rejected
+                     && !session_limits.is_limited(api)
+                     && !session_limits.refuses(api)
                })
       })
    }
@@ -348,17 +350,32 @@ impl SessionPool {
       loop {
          let start = self.cursor.fetch_add(1, Ordering::Relaxed);
          let mut limits = self.limits.write().await;
-         let eligible = (0..self.sessions.len())
-            .map(|offset| (start.wrapping_add(offset)) % self.sessions.len())
-            .filter(|&index| {
-               let slot = &self.sessions[index];
-               excluded_id != Some(slot.credentials.id)
-                  && required_kind.is_none_or(|kind| slot.credentials.kind == kind)
-                  && !limits
-                     .get(&slot.credentials.id)
-                     .is_some_and(|session_limits| session_limits.rejected)
-            })
-            .collect::<Vec<_>>();
+         // Accounts seen getting results for this call go first, still in
+         // rotation. Unchecked ones are reached only when those are spent or
+         // busy, so a fresh batch X refuses is not handed to visitors.
+         let mut eligible = Vec::with_capacity(self.sessions.len());
+         let mut unchecked = Vec::new();
+         for offset in 0..self.sessions.len() {
+            let index = start.wrapping_add(offset) % self.sessions.len();
+            let slot = &self.sessions[index];
+            if excluded_id == Some(slot.credentials.id)
+               || required_kind.is_some_and(|kind| slot.credentials.kind != kind)
+            {
+               continue;
+            }
+            let session_limits = limits.get(&slot.credentials.id);
+            if session_limits.is_some_and(|session_limits| session_limits.rejected) {
+               continue;
+            }
+            if session_limits.is_some_and(|session_limits| {
+               session_limits.verified(api_for(slot.credentials.kind))
+            }) {
+               eligible.push(index);
+            } else {
+               unchecked.push(index);
+            }
+         }
+         eligible.append(&mut unchecked);
 
          if eligible.is_empty() {
             return Err(Error::NoSessions);
@@ -440,7 +457,9 @@ impl SessionPool {
          .iter()
          .filter(|slot| {
             limits.get(&slot.credentials.id).is_none_or(|session_limits| {
-               !session_limits.rejected && !session_limits.is_limited(api)
+               !session_limits.rejected
+                  && !session_limits.is_limited(api)
+                  && !session_limits.refuses(api)
             })
          })
          .count()
@@ -516,6 +535,54 @@ impl SessionPool {
 
       if let Some(lim) = limits.get_mut(&session_id) {
          lim.limit_endpoint(api);
+      }
+      drop(limits);
+      self.persist_now().await;
+   }
+
+   /// Record that a session got results for `api`, which moves it ahead of
+   /// unchecked accounts for that call.
+   pub async fn mark_verified(&self, session_id: i64, api: &str) {
+      if self
+         .limits
+         .read()
+         .await
+         .get(&session_id)
+         .is_none_or(|session_limits| session_limits.verified(api))
+      {
+         return;
+      }
+      let mut limits = self.limits.write().await;
+      if let Some(lim) = limits.get_mut(&session_id) {
+         lim.verify(api);
+      }
+      drop(limits);
+      self.mark_dirty();
+   }
+
+   /// Cookie sessions nobody has yet seen get results for `api`, or refused
+   /// long enough ago to look at again.
+   pub async fn unchecked_for(&self, api: &str) -> Vec<i64> {
+      let limits = self.limits.read().await;
+      self
+         .sessions
+         .iter()
+         .filter(|slot| slot.credentials.kind == SessionKind::Cookie)
+         .filter(|slot| {
+            limits.get(&slot.credentials.id).is_none_or(|session_limits| {
+               !session_limits.rejected && session_limits.unchecked(api)
+            })
+         })
+         .map(|slot| slot.credentials.id)
+         .collect()
+   }
+
+   /// Leave a session out of one operation X answers it nothing for, while
+   /// other accounts get results. The rest of its endpoints stay in use.
+   pub async fn mark_refused(&self, session_id: i64, api: &str) {
+      let mut limits = self.limits.write().await;
+      if let Some(lim) = limits.get_mut(&session_id) {
+         lim.refuse(api);
       }
       drop(limits);
       self.persist_now().await;
@@ -970,6 +1037,85 @@ mod tests {
          .unwrap()
          .unwrap();
       assert!(matches!(woke, Err(Error::RateLimited)));
+
+      fs::remove_file(path).await.unwrap();
+   }
+
+   #[tokio::test]
+   async fn a_refused_operation_skips_that_account_only() {
+      unsafe { env::set_var("TEAPOT_SESSION_STATE_FILE", "") };
+      let path = env::temp_dir().join(format!(
+         "teapot-session-pool-refused-{}.jsonl",
+         process::id()
+      ));
+      fs::write(
+         &path,
+         concat!(
+            r#"{"id":1,"username":"blocked","kind":"cookie","auth_token":"a","ct0":"c"}"#,
+            "\n",
+            r#"{"id":2,"username":"fine","kind":"cookie","auth_token":"b","ct0":"d"}"#,
+            "\n"
+         ),
+      )
+      .await
+      .unwrap();
+      let pool = SessionPool::load(path.to_str().unwrap(), 4).await.unwrap();
+      pool
+         .mark_refused(1, "old-id/SearchTimeline")
+         .await;
+
+      for _ in 0..4 {
+         let lease = pool
+            .acquire("new-id/SearchTimeline", Some(SessionKind::Cookie))
+            .await
+            .unwrap();
+         assert_eq!(lease.id, 2);
+      }
+      assert_eq!(pool.available_for("new-id/SearchTimeline").await, 1);
+      assert_eq!(pool.available_for("x/UserTweets").await, 2);
+
+      fs::remove_file(path).await.unwrap();
+   }
+
+   #[tokio::test]
+   async fn accounts_known_to_search_go_first() {
+      unsafe { env::set_var("TEAPOT_SESSION_STATE_FILE", "") };
+      let path = env::temp_dir().join(format!(
+         "teapot-session-pool-verified-{}.jsonl",
+         process::id()
+      ));
+      fs::write(
+         &path,
+         concat!(
+            r#"{"id":1,"username":"new","kind":"cookie","auth_token":"a","ct0":"c"}"#,
+            "\n",
+            r#"{"id":2,"username":"known","kind":"cookie","auth_token":"b","ct0":"d"}"#,
+            "\n",
+            r#"{"id":3,"username":"new-too","kind":"cookie","auth_token":"e","ct0":"f"}"#,
+            "\n"
+         ),
+      )
+      .await
+      .unwrap();
+      let pool = SessionPool::load(path.to_str().unwrap(), 4).await.unwrap();
+      pool.mark_verified(2, "a/SearchTimeline").await;
+      assert_eq!(pool.unchecked_for("b/SearchTimeline").await, vec![1, 3]);
+
+      for _ in 0..5 {
+         let lease = pool
+            .acquire("b/SearchTimeline", Some(SessionKind::Cookie))
+            .await
+            .unwrap();
+         assert_eq!(lease.id, 2);
+      }
+      let other = pool
+         .acquire_excluding("b/SearchTimeline", Some(SessionKind::Cookie), Some(2))
+         .await
+         .unwrap();
+      assert_ne!(other.id, 2);
+
+      pool.mark_refused(2, "b/SearchTimeline").await;
+      assert_eq!(pool.unchecked_for("b/SearchTimeline").await, vec![1, 3]);
 
       fs::remove_file(path).await.unwrap();
    }

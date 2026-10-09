@@ -217,6 +217,11 @@ fn accepted_profile(engine: Engine) -> Impersonate {
 /// How long one probe handshake may take before the version is skipped.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 
+/// Handshakes a version must pass in a row, across the operating systems its
+/// sessions run on. A single one once let Chrome 152 through while X refused
+/// it on nearly every later connection.
+const PROBE_HANDSHAKES: usize = 3;
+
 /// Find, per engine, the newest profile X accepts, by handshaking with
 /// x.com through `proxy` (or directly). Runs once at startup; a second call
 /// is a no-op.
@@ -261,21 +266,25 @@ pub async fn probe_accepted(proxy: Option<ProxyConfig>) {
 }
 
 async fn newest_accepted(engine: Engine, proxy: Option<&ProxyConfig>) -> Option<Impersonate> {
-   for &profile in engine.candidates() {
-      if handshakes(profile, proxy).await {
-         return Some(profile);
+   'versions: for &profile in engine.candidates() {
+      let oses = os_weights(engine);
+      for round in 0..PROBE_HANDSHAKES.max(oses.len()) {
+         if !handshakes(profile, oses[round % oses.len()].0, proxy).await {
+            tracing::debug!(%engine, ?profile, "X refused this browser profile");
+            continue 'versions;
+         }
       }
-      tracing::debug!(%engine, ?profile, "X refused this browser profile");
+      return Some(profile);
    }
    None
 }
 
-/// Whether a client built from `profile` gets any HTTP answer from x.com. The
-/// status does not matter; a refused ClientHello never gets one.
-async fn handshakes(profile: Impersonate, proxy: Option<&ProxyConfig>) -> bool {
+/// Whether a fresh client built from `profile` gets any HTTP answer from
+/// x.com. The status does not matter; a refused ClientHello never gets one.
+async fn handshakes(profile: Impersonate, os: ImpersonateOS, proxy: Option<&ProxyConfig>) -> bool {
    let mut builder = primp::Client::builder()
       .impersonate(profile)
-      .impersonate_os(ImpersonateOS::Windows)
+      .impersonate_os(os)
       .redirect(primp::redirect::Policy::none())
       .timeout(PROBE_TIMEOUT);
    builder = match proxy.and_then(|proxy| primp::Proxy::all(proxy.url()).ok()) {

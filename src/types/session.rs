@@ -51,11 +51,29 @@ pub struct SessionLimits {
    #[serde(default)]
    pub age_gate_cleared: bool,
    pub apis:             HashMap<String, RateLimit>,
+   /// Operations X answers with an empty 404 from this account while another
+   /// account gets a result, by operation name, with when that was seen.
+   #[serde(default)]
+   pub refused_ops:      HashMap<String, i64>,
+   /// Operations this account has been seen getting results for, by
+   /// operation name, with when.
+   #[serde(default)]
+   pub verified_ops:     HashMap<String, i64>,
 }
 
 /// How long a globally-limited session stays limited before auto-recovery (15
 /// min).
 const GLOBAL_LIMIT_DURATION_SECS: i64 = 15 * 60;
+
+/// How long an account sits out an operation X refused it, before it is
+/// tried again in case X lifted the restriction.
+const REFUSED_OP_SECS: i64 = 24 * 60 * 60;
+
+/// `SearchTimeline` from `ph2fARFabkwfxqmSKQ1OPw/SearchTimeline`, so a mark
+/// outlives a change of query id.
+fn operation_name(api: &str) -> &str {
+   api.rsplit('/').next().unwrap_or(api)
+}
 
 /// Result of taking one call from a session's local window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,12 +101,54 @@ impl SessionLimits {
       false
    }
 
+   /// Whether X refused this account `api` recently.
+   #[must_use]
+   pub fn refuses(&self, api: &str) -> bool {
+      let now = time::OffsetDateTime::now_utc().unix_timestamp();
+      self
+         .refused_ops
+         .get(operation_name(api))
+         .is_some_and(|at| now - at < REFUSED_OP_SECS)
+   }
+
+   /// Leave this account out of `api` for [`REFUSED_OP_SECS`].
+   pub fn refuse(&mut self, api: &str) {
+      let now = time::OffsetDateTime::now_utc().unix_timestamp();
+      self
+         .refused_ops
+         .retain(|_, at| now - *at < REFUSED_OP_SECS);
+      self
+         .refused_ops
+         .insert(operation_name(api).to_owned(), now);
+      self.verified_ops.remove(operation_name(api));
+   }
+
+   /// Whether this account has been seen getting results for `api`.
+   #[must_use]
+   pub fn verified(&self, api: &str) -> bool {
+      self.verified_ops.contains_key(operation_name(api))
+   }
+
+   /// Record that this account got results for `api`.
+   pub fn verify(&mut self, api: &str) {
+      let now = time::OffsetDateTime::now_utc().unix_timestamp();
+      self
+         .verified_ops
+         .insert(operation_name(api).to_owned(), now);
+   }
+
+   /// Whether it is still unknown if X lets this account call `api`.
+   #[must_use]
+   pub fn unchecked(&self, api: &str) -> bool {
+      !self.refuses(api) && !self.verified(api)
+   }
+
    /// Spend one local call against `api` when its window is known.
    ///
    /// The decrement happens before the request is handed out, so the next
    /// acquire sees the account as exhausted instead of piling onto it.
    pub(crate) fn try_spend(&mut self, api: &str) -> Spend {
-      if self.rejected || self.is_globally_limited() {
+      if self.rejected || self.is_globally_limited() || self.refuses(api) {
          return Spend::Denied;
       }
       let now = time::OffsetDateTime::now_utc().unix_timestamp();
@@ -189,6 +249,8 @@ impl Session {
             filters_cleared:  false,
             age_gate_cleared: false,
             apis:             self.apis,
+            refused_ops:      HashMap::new(),
+            verified_ops:     HashMap::new(),
          },
       )
    }
